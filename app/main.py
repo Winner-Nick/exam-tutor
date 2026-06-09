@@ -1,19 +1,42 @@
 """FastAPI 服务：上传试卷、查询进度、获取题目、改答案、答疑。"""
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import llm, pipeline, prompts, store
-from .config import STATIC_DIR, settings
+from .config import JOBS_DIR, STATIC_DIR, settings
 from .models import AskRequest, OverrideRequest
 
-app = FastAPI(title="ExamTutor", version="0.1.0")
+
+def _resume_interrupted_jobs() -> None:
+    """服务重启后自动续跑仍处于 processing 的作业。
+
+    后台处理在进程内线程里跑，重启会中断它们；视觉结果已缓存，续跑很快。
+    """
+    for jf in JOBS_DIR.glob("*/job.json"):
+        try:
+            j = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if j.get("status") == "processing":
+            threading.Thread(target=pipeline.process_job, args=(j["id"],), daemon=True).start()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _resume_interrupted_jobs()
+    yield
+
+
+app = FastAPI(title="ExamTutor", version="0.1.0", lifespan=lifespan)
 
 
 def _find_question(job: dict, qid: str) -> dict | None:
