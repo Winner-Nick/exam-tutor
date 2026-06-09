@@ -31,6 +31,16 @@ function toast(msg) {
 }
 function esc(s) { return (s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
+// 记住/忘记当前作业：写入 URL(?job=) 与 localStorage，刷新或重开也能恢复
+function rememberJob(id) {
+  try { localStorage.setItem('et_job', id); } catch {}
+  history.replaceState(null, '', '?job=' + id);
+}
+function forgetJob() {
+  try { localStorage.removeItem('et_job'); } catch {}
+  history.replaceState(null, '', location.pathname);
+}
+
 // 极简 markdown -> html（用于答疑/讲解文本）
 function md(text) {
   const lines = String(text ?? '').split('\n');
@@ -59,7 +69,7 @@ function initUpload() {
   ['dragenter', 'dragover'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('drag'); }));
   ['dragleave', 'drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('drag'); }));
   dz.addEventListener('drop', ev => { const f = ev.dataTransfer.files[0]; if (f) uploadFile(f); });
-  $('#btn-new').addEventListener('click', () => { if (state.poller) clearInterval(state.poller); show('upload'); });
+  $('#btn-new').addEventListener('click', () => { if (state.poller) clearInterval(state.poller); forgetJob(); show('upload'); });
 }
 
 async function uploadFile(file) {
@@ -71,6 +81,7 @@ async function uploadFile(file) {
     const fd = new FormData(); fd.append('file', file);
     const { job_id } = await api('/api/upload', { method: 'POST', body: fd });
     state.jobId = job_id;
+    rememberJob(job_id);   // 立刻写入URL/存储，刷新也不丢
     startPolling();
   } catch (e) { toast(e.message); show('upload'); }
 }
@@ -327,13 +338,15 @@ function initPaper() {
 async function resumeJob(jid) {
   try {
     const job = await api(`/api/jobs/${jid}`);
-    state.job = job;
+    state.job = job; state.jobId = jid; rememberJob(jid);
     if (job.status === 'done') loadResults(job);
     else if (job.status === 'processing') { show('processing'); startPolling(); }
-    else { toast('该作业处理失败'); show('upload'); }
-  } catch { toast('找不到该作业'); show('upload'); }
+    else { forgetJob(); toast('上次的作业处理失败，请重新上传'); show('upload'); }
+  } catch { forgetJob(); show('upload'); }
 }
 
 initUpload(); initFilters(); initChat(); initPaper();
-const _deepJob = new URLSearchParams(location.search).get('job');
-if (_deepJob) { state.jobId = _deepJob; resumeJob(_deepJob); } else show('upload');
+// 恢复优先级：URL 的 ?job= > 上次记住的作业；都没有才显示上传页
+let _resume = new URLSearchParams(location.search).get('job');
+if (!_resume) { try { _resume = localStorage.getItem('et_job'); } catch {} }
+if (_resume) resumeJob(_resume); else show('upload');
