@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+
+# Runtime data (uploaded PDFs, rendered images, job results)
+data/
+*.db
+
+# OS / editor
+.DS_Store
+.vscode/
+*.log
