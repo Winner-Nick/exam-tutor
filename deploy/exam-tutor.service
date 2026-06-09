@@ -9,8 +9,9 @@ WorkingDirectory=/home/ubuntu/exam-tutor
 ExecStart=/home/ubuntu/exam-tutor/run.sh
 Restart=always
 RestartSec=3
-# 2GB 小机器：限制内存，超限自动重启而非拖垮系统
-MemoryMax=600M
+# 2GB 小机器：软上限先触发内存回收，硬上限兜底；避免处理中被直接 OOM 杀掉
+MemoryHigh=800M
+MemoryMax=1100M
 
 [Install]
 WantedBy=multi-user.target
