@@ -1,49 +1,45 @@
-"""FastAPI 服务：上传试卷、查询进度、获取题目、改答案、答疑。"""
+"""FastAPI 服务：上传试卷、查询进度、获取题目、改答案、答疑。
+
+阶段 1 过渡版：存储已切到 SQLite，认证在阶段 2 引入（作业暂归属首个用户）。
+"""
 from __future__ import annotations
 
-import json
 import shutil
 import threading
-import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import llm, pipeline, prompts, store
-from .config import JOBS_DIR, STATIC_DIR, settings
+from . import auth, llm, pipeline, prompts, store
+from .config import STATIC_DIR, settings
+from .db import get_conn, init_db
 from .models import AskRequest, OverrideRequest
 
 
 def _resume_interrupted_jobs() -> None:
-    """服务重启后自动续跑仍处于 processing 的作业。
-
-    后台处理在进程内线程里跑，重启会中断它们；视觉结果已缓存，续跑很快。
-    """
-    for jf in JOBS_DIR.glob("*/job.json"):
-        try:
-            j = json.loads(jf.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if j.get("status") == "processing":
-            threading.Thread(target=pipeline.process_job, args=(j["id"],), daemon=True).start()
+    """服务重启后自动续跑仍处于 processing 的作业（视觉结果有缓存，续跑很快）。"""
+    for job_id in store.list_processing_job_ids():
+        threading.Thread(target=pipeline.process_job, args=(job_id,), daemon=True).start()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
     _resume_interrupted_jobs()
     yield
 
 
-app = FastAPI(title="ExamTutor", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="ExamTutor", version="0.2.0", lifespan=lifespan)
 
 
-def _find_question(job: dict, qid: str) -> dict | None:
-    for q in job.get("questions", []):
-        if q.get("id") == qid:
-            return q
-    return None
+def _default_user_id() -> int:
+    """阶段 2 引入登录前的过渡：作业归属首个用户（无则创建占位账号）。"""
+    row = get_conn().execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+    if row:
+        return row["id"]
+    return store.create_user("local", auth.hash_password("local"), role="admin")
 
 
 # ---------------------------------------------------------------------------
@@ -56,38 +52,21 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(400, "请上传 PDF 文件")
 
     job_id = store.new_job_id()
-    jd = store.job_dir(job_id)
-    pdf_path = jd / "source.pdf"
-    with pdf_path.open("wb") as f:
+    pdf = store.pdf_path(job_id)
+    with pdf.open("wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    job = {
-        "id": job_id,
-        "filename": file.filename,
-        "pdf_path": str(pdf_path),
-        "status": "processing",
-        "stage": "queued",
-        "progress": {"done": 0, "total": 1, "label": "排队中…"},
-        "error": None,
-        "created_at": time.time(),
-        "meta": {},
-        "questions": [],
-        "stats": {},
-        "chat": {},
-    }
-    store.save_job(job)
-
+    store.create_job(job_id, _default_user_id(), file.filename)
     threading.Thread(target=pipeline.process_job, args=(job_id,), daemon=True).start()
     return {"job_id": job_id}
 
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
-    job = store.load_job(job_id)
+    job = store.get_job_full(job_id)
     if not job:
         raise HTTPException(404, "作业不存在")
-    # 不必把内部路径暴露给前端
-    job.pop("pdf_path", None)
+    job.pop("user_id", None)
     return job
 
 
@@ -105,10 +84,7 @@ def page_image(job_id: str, n: int):
 
 @app.post("/api/jobs/{job_id}/questions/{qid}/override")
 def override_answer(job_id: str, qid: str, req: OverrideRequest):
-    job = store.load_job(job_id)
-    if not job:
-        raise HTTPException(404, "作业不存在")
-    q = _find_question(job, qid)
+    q = store.get_question(job_id, qid)
     if not q:
         raise HTTPException(404, "题目不存在")
 
@@ -128,16 +104,16 @@ def override_answer(job_id: str, qid: str, req: OverrideRequest):
             exp = (res.get("explanations") or {}).get(q["id"])
             if exp:
                 q["explanation"] = exp
+                q["explain_state"] = "done"
         except Exception:  # noqa: BLE001
             pass
 
-    with store.editing(job_id) as j:
-        if j is None:
-            raise HTTPException(404, "作业不存在")
-        tq = _find_question(j, qid)
-        tq.update(q)
-        j["stats"] = pipeline._stats(j["questions"])
-        stats = j["stats"]
+    store.update_question(
+        job_id, qid,
+        student_answer=q.get("student_answer"), status=q["status"],
+        explanation=q.get("explanation"), explain_state=q.get("explain_state") or "none",
+    )
+    stats = store.refresh_stats(job_id)
     return {"question": q, "stats": stats}
 
 
@@ -147,40 +123,36 @@ def override_answer(job_id: str, qid: str, req: OverrideRequest):
 
 @app.post("/api/jobs/{job_id}/ask")
 def ask(job_id: str, req: AskRequest):
-    job = store.load_job(job_id)
+    job = store.get_job(job_id)
     if not job:
         raise HTTPException(404, "作业不存在")
     if not req.question.strip():
         raise HTTPException(400, "问题不能为空")
 
     messages = [{"role": "system", "content": prompts.CHAT_SYSTEM}]
-    if req.qid:
-        q = _find_question(job, req.qid)
+    qid = req.qid or None
+    if qid:
+        q = store.get_question(job_id, qid)
         if q:
             messages.append({"role": "system", "content": prompts.chat_question_context(q)})
 
-    key = req.qid or "general"
-    history = (job.get("chat") or {}).get(key, [])
+    history = store.get_chat(job_id, qid)
     messages.extend(history[-12:])
     messages.append({"role": "user", "content": req.question})
 
     answer = llm.deepseek_chat(messages)
 
-    with store.editing(job_id) as j:
-        chat = j.setdefault("chat", {})
-        lst = chat.setdefault(key, [])
-        lst.append({"role": "user", "content": req.question})
-        lst.append({"role": "assistant", "content": answer})
+    store.add_chat_message(job_id, qid, "user", req.question)
+    store.add_chat_message(job_id, qid, "assistant", answer)
     return {"answer": answer}
 
 
 @app.get("/api/jobs/{job_id}/chat")
 def get_chat(job_id: str, qid: str | None = None):
-    job = store.load_job(job_id)
+    job = store.get_job(job_id)
     if not job:
         raise HTTPException(404, "作业不存在")
-    key = qid or "general"
-    return {"messages": (job.get("chat") or {}).get(key, [])}
+    return {"messages": store.get_chat(job_id, qid or None)}
 
 
 # ---------------------------------------------------------------------------

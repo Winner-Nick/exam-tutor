@@ -111,11 +111,7 @@ def build_meta(pages: list[dict], questions: list[dict], filename: str) -> dict:
 
 
 def _set_progress(job_id: str, stage: str, done: int, total: int, label: str) -> None:
-    with store.editing(job_id) as job:
-        if job is None:
-            return
-        job["stage"] = stage
-        job["progress"] = {"done": done, "total": total, "label": label}
+    store.set_progress(job_id, stage, done, total, label)
 
 
 def _stats(questions: list[dict]) -> dict:
@@ -144,18 +140,17 @@ def regrade(questions: list[dict]) -> None:
 
 
 def process_job(job_id: str) -> None:
-    job = store.load_job(job_id)
+    job = store.get_job(job_id)
     if not job:
         return
-    pdf_path = job["pdf_path"]
+    pdf_path = store.pdf_path(job_id)
     jd = store.job_dir(job_id)
 
     try:
         # 1) 渲染 PDF
         _set_progress(job_id, "render", 0, 1, "正在渲染试卷页面…")
         imgs = pdf_utils.render_pdf_to_images(pdf_path, jd / "pages")
-        with store.editing(job_id) as j:
-            j["page_count"] = len(imgs)
+        store.update_job(job_id, page_count=len(imgs))
 
         # 2) 逐页视觉识别（结果缓存，便于重跑）
         pages_cache = jd / "pages_raw.json"
@@ -204,19 +199,13 @@ def process_job(job_id: str) -> None:
                         q["knowledge_point"] = exp["knowledge_point"]
 
         # 5) 完成
-        with store.editing(job_id) as job:
-            if job is None:
-                return
-            job["status"] = "done"
-            job["stage"] = "done"
-            job["meta"] = meta
-            job["questions"] = questions
-            job["stats"] = _stats(questions)
-            job["progress"] = {"done": 1, "total": 1, "label": "完成"}
+        store.replace_questions(job_id, questions)
+        store.update_job(
+            job_id, status="done", stage="done", meta=meta,
+            title=meta.get("title"), stats=_stats(questions),
+            progress_done=1, progress_total=1, progress_label="完成",
+        )
 
     except Exception as exc:  # noqa: BLE001
-        with store.editing(job_id) as job:
-            if job is not None:
-                job["status"] = "error"
-                job["error"] = f"{type(exc).__name__}: {exc}"
+        store.update_job(job_id, status="error", error=f"{type(exc).__name__}: {exc}")
         raise
