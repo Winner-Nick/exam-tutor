@@ -39,8 +39,9 @@ export function JobPage() {
     queryKey: ['job', jobId],
     queryFn: () => api.getJob(jobId!),
     enabled: !!jobId,
-    // SSE 不可用时降级轮询
-    refetchInterval: (q) => (sseDown && q.state.data?.status === 'processing' ? 3000 : false),
+    // 处理中始终兜底轮询（代理层可能缓冲 SSE）；SSE 失联时加快频率
+    refetchInterval: (q) =>
+      q.state.data?.status === 'processing' ? (sseDown ? 3000 : 5000) : false,
   })
 
   // 切换作业时重置选中态

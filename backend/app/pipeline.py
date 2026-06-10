@@ -420,7 +420,8 @@ def process_submission(job_id: str) -> None:
             n, a = str(num or "").strip(), str(ans or "").strip()
             if not n or not a:
                 return
-            c = _CONF.get(str(conf or "").lower(), 1)
+            # 未给置信度按 medium 算；显式 low（涂改/模糊）后面不直接判对错
+            c = _CONF.get(str(conf or "").lower(), 2)
             if n not in answers or c > answers[n][1]:
                 answers[n] = (a, c)
 
@@ -462,6 +463,13 @@ def process_submission(job_id: str) -> None:
 
         _set_progress(job_id, "consolidate", 0, 1, "正在对照标准答案判分…")
         questions = grade_submission_questions(paper_qs, {k: v[0] for k, v in answers.items()})
+
+        # 低置信度识别（涂改、字迹模糊）不可信：即便恰好与标准答案一致也不判对，
+        # 标为"待确认"交老师在结果页核对修正
+        low_nums = {k for k, v in answers.items() if v[1] <= _CONF["low"]}
+        for q in questions:
+            if str(q["number"]) in low_nums and q["status"] in ("correct", "wrong"):
+                q["status"] = "unknown"
         meta = {"title": job.get("paper_title") or "试卷",
                 "total_questions": len(questions)}
 
