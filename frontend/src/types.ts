@@ -115,6 +115,15 @@ export interface ChatMessage {
   content: string
 }
 
+export interface Release {
+  tag: string
+  name: string
+  body: string
+  published_at: string | null
+  prerelease: boolean
+  apk_size: number | null
+}
+
 export interface Invite {
   code: string
   created_by_name: string | null

@@ -6,6 +6,7 @@ import type {
   Paper,
   PaperQuestion,
   Question,
+  Release,
   Student,
   User,
 } from './types'
@@ -158,6 +159,9 @@ export const api = {
     request<{ messages: ChatMessage[] }>(
       `/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`,
     ),
+
+  // App 安装包发布页（公开，无需登录）
+  listReleases: () => request<{ releases: Release[] }>('/api/releases'),
 
   // 聚合（可按学生过滤）
   mistakes: (studentId?: number | null) =>

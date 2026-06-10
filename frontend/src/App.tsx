@@ -5,6 +5,7 @@ import { AppShell } from './components/AppShell'
 import { Spinner } from './components/Spinner'
 import { ToastProvider } from './components/Toast'
 import { DashboardPage } from './pages/DashboardPage'
+import { DownloadPage } from './pages/DownloadPage'
 import { JobPage } from './pages/JobPage'
 import { LoginPage } from './pages/LoginPage'
 import { MistakesPage } from './pages/MistakesPage'
@@ -46,6 +47,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/download" element={<DownloadPage />} />
             <Route element={<Protected />}>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/jobs/:jobId" element={<JobPage />} />
