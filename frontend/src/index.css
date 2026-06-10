@@ -65,6 +65,18 @@ body {
   @apply rounded-full bg-slate-300 dark:bg-slate-600;
 }
 
+/* 占位文字用纯色：Tailwind v4 默认用 color-mix(in oklab) 计算 placeholder 颜色，
+   华为浏览器/鸿蒙 WebView 等旧内核不支持或实现有误，导致占位文字不可见 */
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8; /* slate-400 */
+  opacity: 1;
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #64748b; /* slate-500 */
+}
+
 /* 隐藏滚动条（移动端导航横向滑动） */
 .no-scrollbar {
   scrollbar-width: none;
