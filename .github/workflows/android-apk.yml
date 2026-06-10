@@ -1,0 +1,72 @@
+# 自动构建安卓 APK（Capacitor 套壳，WebView 直连你的服务器）。
+# 服务器地址不写进仓库：在 Settings -> Secrets and variables -> Actions -> Variables
+# 配置 APP_SERVER_URL（如 https://your.domain）。构建产物在 run 页面的 Artifacts 下载。
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/android-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build web assets
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Scaffold Capacitor Android shell
+        working-directory: frontend
+        env:
+          APP_SERVER_URL: ${{ vars.APP_SERVER_URL }}
+        run: |
+          if [ -z "$APP_SERVER_URL" ]; then
+            echo "::error::请在仓库 Settings -> Actions Variables 配置 APP_SERVER_URL"
+            exit 1
+          fi
+          npm i --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          cat > capacitor.config.json <<EOF
+          {
+            "appId": "work.examtutor.app",
+            "appName": "错题家教",
+            "webDir": "dist",
+            "server": { "url": "$APP_SERVER_URL" }
+          }
+          EOF
+          npx cap add android
+          # 拍照上传需要相机权限
+          sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.CAMERA" />#' \
+            android/app/src/main/AndroidManifest.xml
+          npx cap sync android
+
+      - name: Build debug APK
+        working-directory: frontend/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Rename artifact
+        run: cp frontend/android/app/build/outputs/apk/debug/app-debug.apk 错题家教.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: examtutor-apk
+          path: 错题家教.apk
+          retention-days: 30
