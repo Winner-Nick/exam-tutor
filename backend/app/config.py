@@ -34,12 +34,22 @@ class Settings:
     render_dpi: int = int(os.getenv("RENDER_DPI", "150"))
     vision_concurrency: int = int(os.getenv("VISION_CONCURRENCY", "3"))
 
+    # 认证与安全
+    jwt_secret: str = os.getenv("JWT_SECRET", "")
+    allow_open_register: bool = os.getenv("ALLOW_OPEN_REGISTER", "0") == "1"
+    cookie_secure: bool = os.getenv("COOKIE_SECURE", "0") == "1"  # 有 HTTPS 时设 1
+    max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "30"))
+    max_pages: int = int(os.getenv("MAX_PAGES", "30"))
+    max_processing_per_user: int = int(os.getenv("MAX_PROCESSING_PER_USER", "2"))
+
     def validate(self) -> list[str]:
         problems = []
         if not self.openrouter_api_key:
             problems.append("缺少 OPENROUTER_API_KEY（视觉识别用）")
         if not self.deepseek_api_key:
             problems.append("缺少 DEEPSEEK_API_KEY（文本推理用）")
+        if not self.jwt_secret:
+            problems.append("缺少 JWT_SECRET（会话签名用，可用 secrets.token_urlsafe(48) 生成）")
         return problems
 
 
