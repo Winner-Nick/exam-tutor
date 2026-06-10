@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 
 from . import events, llm, pdf_utils, store
 
@@ -147,23 +148,46 @@ def process_job(job_id: str) -> None:
     jd = store.job_dir(job_id)
 
     try:
-        # 1) 渲染 PDF
-        _set_progress(job_id, "render", 0, 1, "正在渲染试卷页面…")
-        imgs = pdf_utils.render_pdf_to_images(pdf_path, jd / "pages")
+        pages_cache = jd / "pages_raw.json"
+        pages_dir = jd / "pages"
+
+        # 0) 同内容 PDF 去重：直接复用旧作业的页面图与视觉识别结果（Gemini 成本为 0）
+        if not pages_cache.exists() and job.get("pdf_sha256"):
+            donor = store.find_reusable_job_by_sha(job["pdf_sha256"], job_id)
+            if donor:
+                donor_dir = store.job_dir(donor)
+                if (donor_dir / "pages").exists():
+                    shutil.copytree(donor_dir / "pages", pages_dir, dirs_exist_ok=True)
+                shutil.copy2(donor_dir / "pages_raw.json", pages_cache)
+
+        # 1) 渲染 PDF（去重命中时页面图已就位，跳过）
+        imgs = sorted(pages_dir.glob("page_*.jpg")) if pages_dir.exists() else []
+        if not imgs:
+            _set_progress(job_id, "render", 0, 1, "正在渲染试卷页面…")
+            imgs = pdf_utils.render_pdf_to_images(pdf_path, pages_dir)
         store.update_job(job_id, page_count=len(imgs))
 
-        # 2) 逐页视觉识别（结果缓存，便于重跑）
-        pages_cache = jd / "pages_raw.json"
+        # 2) 逐页视觉识别（空白页直接跳过；结果缓存，便于重跑与跨作业复用）
         if pages_cache.exists():
             pages = json.loads(pages_cache.read_text(encoding="utf-8"))
         else:
-            payload = [(i + 1, pdf_utils.image_to_data_url(p)) for i, p in enumerate(imgs)]
+            by_idx: dict[int, dict] = {}
+            payload = []
+            for i, p in enumerate(imgs):
+                idx = i + 1
+                if pdf_utils.is_blank_page(p):
+                    by_idx[idx] = {"page": idx, "page_role": ["blank"], "raw_text": "",
+                                   "questions": [], "answer_key": {}}
+                else:
+                    payload.append((idx, pdf_utils.image_to_data_url(p)))
             _set_progress(job_id, "vision", 0, len(payload), "正在识别试卷内容…")
 
             def prog(done: int, total: int) -> None:
                 _set_progress(job_id, "vision", done, total, f"正在识别第 {done}/{total} 页…")
 
-            pages = llm.vision_extract_pages(payload, on_progress=prog)
+            for r in llm.vision_extract_pages(payload, on_progress=prog):
+                by_idx[r["page"]] = r
+            pages = [by_idx[i] for i in sorted(by_idx)]
             pages_cache.write_text(json.dumps(pages, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # 3) 汇总 + 判分（代码合并各页结果，稳健可控）

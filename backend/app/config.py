@@ -32,6 +32,9 @@ class Settings:
     host: str = os.getenv("EXAMTUTOR_HOST", "0.0.0.0")
     port: int = int(os.getenv("EXAMTUTOR_PORT", "8080"))
     render_dpi: int = int(os.getenv("RENDER_DPI", "150"))
+    render_max_dim: int = int(os.getenv("RENDER_MAX_DIM", "1280"))  # 最长边像素；视觉 token 成本的主杠杆
+    render_quality: int = int(os.getenv("RENDER_QUALITY", "80"))
+    render_grayscale: bool = os.getenv("RENDER_GRAYSCALE", "1") == "1"  # 黑白试卷无损，体积省 ~60%
     vision_concurrency: int = int(os.getenv("VISION_CONCURRENCY", "3"))
 
     # 认证与安全

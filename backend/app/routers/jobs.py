@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api", tags=["jobs"])
 
 def _public(job: dict) -> dict:
     job.pop("user_id", None)
+    job.pop("pdf_sha256", None)
     return job
 
 
@@ -58,8 +59,7 @@ def delete_job(job: dict = Depends(auth.get_owned_job)):
 @router.get("/jobs/{job_id}/events")
 async def job_events(job: dict = Depends(auth.get_owned_job)):
     """SSE：进度 / 完成 / 出错 / 讲解就绪。连接后先推一条完整快照。"""
-    snapshot = dict(job)
-    snapshot.pop("user_id", None)
+    snapshot = _public(dict(job))
     return StreamingResponse(
         events.sse_stream(job["id"], snapshot),
         media_type="text/event-stream",

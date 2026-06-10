@@ -158,6 +158,7 @@ def _job_row_to_dict(row) -> dict:
         "id": row["id"],
         "user_id": row["user_id"],
         "filename": row["filename"],
+        "pdf_sha256": row["pdf_sha256"],
         "status": row["status"],
         "stage": row["stage"],
         "progress": {
