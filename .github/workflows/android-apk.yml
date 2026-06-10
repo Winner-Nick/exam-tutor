@@ -73,13 +73,15 @@ jobs:
         working-directory: frontend/android
         run: ./gradlew assembleDebug --no-daemon
 
+      # GitHub Release 资产不支持非 ASCII 文件名（会被改成 default.apk），
+      # 用 ASCII 名上传；服务器下载接口会以「错题家教-{版本}.apk」下发
       - name: Rename artifact
-        run: cp frontend/android/app/build/outputs/apk/debug/app-debug.apk 错题家教.apk
+        run: cp frontend/android/app/build/outputs/apk/debug/app-debug.apk ExamTutor.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: examtutor-apk
-          path: 错题家教.apk
+          path: ExamTutor.apk
           retention-days: 30
 
       # 推送 v* 标签时自动发布 Release：版本说明取自标签注释
@@ -97,4 +99,4 @@ jobs:
         with:
           name: 错题家教 ${{ github.ref_name }}
           body_path: release-notes.md
-          files: 错题家教.apk
+          files: ExamTutor.apk
