@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import shutil
-import threading
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
-from .. import auth, pipeline, security, store
+from .. import auth, events, security, store, workers
 from ..config import settings
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -34,7 +33,7 @@ async def upload(file: UploadFile = File(...), user: dict = Depends(auth.get_cur
         raise
 
     store.create_job(job_id, user["id"], file.filename, pdf_sha256=sha256)
-    threading.Thread(target=pipeline.process_job, args=(job_id,), daemon=True).start()
+    workers.enqueue_job(job_id)
     return {"job_id": job_id}
 
 
@@ -54,6 +53,18 @@ def delete_job(job: dict = Depends(auth.get_owned_job)):
         raise HTTPException(409, "作业正在处理中，暂不能删除")
     store.delete_job(job["id"])
     return {"ok": True}
+
+
+@router.get("/jobs/{job_id}/events")
+async def job_events(job: dict = Depends(auth.get_owned_job)):
+    """SSE：进度 / 完成 / 出错 / 讲解就绪。连接后先推一条完整快照。"""
+    snapshot = dict(job)
+    snapshot.pop("user_id", None)
+    return StreamingResponse(
+        events.sse_stream(job["id"], snapshot),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/jobs/{job_id}/page/{n}")

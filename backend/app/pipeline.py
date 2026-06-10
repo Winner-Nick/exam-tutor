@@ -4,9 +4,8 @@ from __future__ import annotations
 import json
 import re
 
-from . import llm, pdf_utils, prompts, store
+from . import events, llm, pdf_utils, store
 
-EXPLAIN_CHUNK = 6  # 每批讲解的题目数
 _CONF = {"high": 3, "medium": 2, "low": 1}
 _SUBJECTIVE_HINT = ("文段表达", "作文", "写作", "writing", "范文")
 
@@ -112,6 +111,7 @@ def build_meta(pages: list[dict], questions: list[dict], filename: str) -> dict:
 
 def _set_progress(job_id: str, stage: str, done: int, total: int, label: str) -> None:
     store.set_progress(job_id, stage, done, total, label)
+    events.publish(job_id, "progress", {"stage": stage, "done": done, "total": total, "label": label})
 
 
 def _stats(questions: list[dict]) -> dict:
@@ -176,36 +176,22 @@ def process_job(job_id: str) -> None:
             encoding="utf-8",
         )
 
-        # 4) 讲解做错/不确定的题
-        targets = [q for q in questions if q.get("status") in ("wrong", "unknown")]
-        if targets:
-            done = 0
-            by_id: dict[str, dict] = {}
-            _set_progress(job_id, "explain", 0, len(targets), "正在讲解错题…")
-            for i in range(0, len(targets), EXPLAIN_CHUNK):
-                chunk = targets[i : i + EXPLAIN_CHUNK]
-                try:
-                    res = llm.deepseek_json(prompts.EXPLAIN_SYSTEM, prompts.explain_user(chunk))
-                    by_id.update(res.get("explanations", {}) or {})
-                except Exception:  # noqa: BLE001 - 单批失败不影响整体
-                    pass
-                done += len(chunk)
-                _set_progress(job_id, "explain", done, len(targets), f"正在讲解错题 {done}/{len(targets)}…")
-            for q in questions:
-                exp = by_id.get(q.get("id"))
-                if exp:
-                    q["explanation"] = exp
-                    if exp.get("knowledge_point") and not q.get("knowledge_point"):
-                        q["knowledge_point"] = exp["knowledge_point"]
-
-        # 5) 完成
+        # 4) 判分即完成；错题讲解交给后台队列预生成（用户点开可插队）
         store.replace_questions(job_id, questions)
         store.update_job(
             job_id, status="done", stage="done", meta=meta,
             title=meta.get("title"), stats=_stats(questions),
             progress_done=1, progress_total=1, progress_label="完成",
         )
+        events.publish(job_id, "job_done", {"status": "done"})
+
+        from . import workers  # 局部导入，避免与 workers -> pipeline 形成环
+
+        targets = [q["id"] for q in questions if q.get("status") in ("wrong", "unknown")]
+        if targets:
+            workers.enqueue_explanations(job_id, targets, priority=1)
 
     except Exception as exc:  # noqa: BLE001
         store.update_job(job_id, status="error", error=f"{type(exc).__name__}: {exc}")
+        events.publish(job_id, "job_error", {"error": f"{type(exc).__name__}: {exc}"})
         raise
