@@ -1,0 +1,174 @@
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { api } from '../api'
+import { ChatPanel } from '../components/ChatPanel'
+import { DonutChart } from '../components/DonutChart'
+import { PaperViewer } from '../components/PaperViewer'
+import { QuestionDetail } from '../components/QuestionDetail'
+import { QuestionGrid } from '../components/QuestionGrid'
+import { Spinner } from '../components/Spinner'
+import { StageStepper } from '../components/StageStepper'
+import { useJobEvents } from '../hooks/useJobEvents'
+import { useUi } from '../store'
+import type { Job } from '../types'
+
+function StatsBar({ job }: { job: Job }) {
+  const s = job.stats
+  const graded = (s.correct ?? 0) + (s.wrong ?? 0)
+  return (
+    <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <DonutChart correct={s.correct ?? 0} total={graded} size={72} />
+      <div className="grid flex-1 grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+        <span>✅ 答对 <b className="text-emerald-600">{s.correct ?? 0}</b></span>
+        <span>❌ 答错 <b className="text-rose-600">{s.wrong ?? 0}</b></span>
+        <span>❓ 待确认 <b className="text-amber-600">{s.unknown ?? 0}</b></span>
+        <span>📝 主观题 <b className="text-violet-600">{s.subjective ?? 0}</b></span>
+      </div>
+    </div>
+  )
+}
+
+export function JobPage() {
+  const { jobId } = useParams<{ jobId: string }>()
+  const { selectedQid, setSelectedQid, mobileTab, setMobileTab, setFilter } = useUi()
+  const [showPaper, setShowPaper] = useState(false)
+  const { sseDown } = useJobEvents(jobId)
+
+  const jobQ = useQuery({
+    queryKey: ['job', jobId],
+    queryFn: () => api.getJob(jobId!),
+    enabled: !!jobId,
+    // SSE 不可用时降级轮询
+    refetchInterval: (q) => (sseDown && q.state.data?.status === 'processing' ? 3000 : false),
+  })
+
+  // 切换作业时重置选中态
+  useEffect(() => {
+    setSelectedQid(null)
+    setFilter('all')
+    setMobileTab('questions')
+  }, [jobId, setSelectedQid, setFilter, setMobileTab])
+
+  if (jobQ.isPending)
+    return (
+      <div className="flex justify-center py-20">
+        <Spinner className="h-8 w-8" />
+      </div>
+    )
+  if (jobQ.isError)
+    return (
+      <div className="py-20 text-center text-slate-400">
+        <p>作业不存在或已被删除</p>
+        <Link to="/" className="mt-2 inline-block text-primary-600">
+          返回试卷列表
+        </Link>
+      </div>
+    )
+
+  const job = jobQ.data
+  const title = job.meta?.title || job.filename || '试卷'
+
+  if (job.status === 'processing') {
+    return (
+      <div className="py-16">
+        <h2 className="mb-10 text-center text-lg font-bold">{title}</h2>
+        <StageStepper job={job} />
+        <p className="mt-8 text-center text-xs text-slate-400">
+          判分完成后立即可看结果，错题讲解会在后台陆续生成
+        </p>
+      </div>
+    )
+  }
+
+  if (job.status === 'error') {
+    return (
+      <div className="py-20 text-center">
+        <p className="text-3xl">😵</p>
+        <p className="mt-3 font-medium">处理失败</p>
+        <p className="mt-1 text-sm text-slate-400">{job.error}</p>
+        <Link to="/" className="mt-4 inline-block text-sm text-primary-600">
+          返回重新上传
+        </Link>
+      </div>
+    )
+  }
+
+  const questions = job.questions ?? []
+  const selected = questions.find((q) => q.id === selectedQid) ?? null
+
+  return (
+    <div className="space-y-4 pb-16 lg:pb-0">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-bold">{title}</h2>
+        <button
+          onClick={() => setShowPaper(true)}
+          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
+        >
+          📖 查看原卷
+        </button>
+      </div>
+
+      <StatsBar job={job} />
+
+      {/* 桌面三栏 / 移动单栏 + 底部 Tab */}
+      <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
+        <section
+          className={`rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 ${
+            mobileTab !== 'questions' ? 'hidden lg:block' : ''
+          }`}
+        >
+          <QuestionGrid questions={questions} />
+        </section>
+
+        <section
+          className={`rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 ${
+            mobileTab !== 'detail' ? 'hidden lg:block' : ''
+          }`}
+        >
+          {selected ? (
+            <QuestionDetail job={job} question={selected} />
+          ) : (
+            <p className="py-16 text-center text-sm text-slate-400">
+              从左侧选择一道题查看详情与讲解
+            </p>
+          )}
+        </section>
+
+        <section
+          className={`rounded-2xl border border-slate-200 bg-white p-4 lg:h-[640px] dark:border-slate-800 dark:bg-slate-900 ${
+            mobileTab !== 'chat' ? 'hidden lg:block' : 'h-[70vh]'
+          }`}
+        >
+          <ChatPanel jobId={job.id} question={selected} onClearFocus={() => setSelectedQid(null)} />
+        </section>
+      </div>
+
+      {/* 移动端底部 Tab */}
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
+        {(
+          [
+            { k: 'questions', label: '题目', icon: '🔢' },
+            { k: 'detail', label: '详情', icon: '📋' },
+            { k: 'chat', label: '答疑', icon: '💬' },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.k}
+            onClick={() => setMobileTab(t.k)}
+            className={`flex flex-col items-center gap-0.5 py-2 text-xs ${
+              mobileTab === t.k ? 'font-semibold text-primary-600' : 'text-slate-400'
+            }`}
+          >
+            <span>{t.icon}</span>
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      {showPaper && job.page_count && (
+        <PaperViewer jobId={job.id} pageCount={job.page_count} onClose={() => setShowPaper(false)} />
+      )}
+    </div>
+  )
+}

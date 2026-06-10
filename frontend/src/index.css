@@ -1,0 +1,71 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-primary-50: #eef2ff;
+  --color-primary-100: #e0e7ff;
+  --color-primary-200: #c7d2fe;
+  --color-primary-300: #a5b4fc;
+  --color-primary-400: #818cf8;
+  --color-primary-500: #6366f1;
+  --color-primary-600: #4f46e5;
+  --color-primary-700: #4338ca;
+  --color-primary-800: #3730a3;
+  --color-primary-900: #312e81;
+  --font-sans: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-800 antialiased dark:bg-slate-950 dark:text-slate-200;
+}
+
+/* Markdown 渲染（讲解/答疑） */
+.md :is(p, ul, ol) {
+  @apply my-1.5 leading-relaxed;
+}
+.md ul {
+  @apply list-disc pl-5;
+}
+.md ol {
+  @apply list-decimal pl-5;
+}
+.md :is(h1, h2, h3, h4) {
+  @apply mt-3 mb-1 text-sm font-bold;
+}
+.md code {
+  @apply rounded bg-slate-200 px-1 py-0.5 text-[0.85em] dark:bg-slate-700;
+}
+.md strong {
+  @apply font-semibold text-primary-700 dark:text-primary-300;
+}
+.md blockquote {
+  @apply my-2 border-l-2 border-primary-300 pl-3 text-slate-500 dark:text-slate-400;
+}
+
+/* 细滚动条 */
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-slate-300 dark:bg-slate-600;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-up {
+  animation: fade-up 0.25s ease-out both;
+}
