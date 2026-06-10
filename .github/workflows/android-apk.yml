@@ -31,7 +31,16 @@ jobs:
       - name: Build web assets
         working-directory: frontend
         run: |
-          npm ci
+          # npm 偶发 "Exit handler never called" 且退出码为 0：重试 + 完整性校验兜底
+          ok=""
+          for i in 1 2 3; do
+            rm -rf node_modules
+            if npm ci --no-audit --no-fund && test -d node_modules/react-router-dom; then
+              ok=1; break
+            fi
+            echo "npm ci 第 $i 次失败，重试…"; sleep 10
+          done
+          test -n "$ok"
           npm run build
 
       - name: Scaffold Capacitor Android shell
