@@ -12,7 +12,7 @@ load_dotenv(BASE_DIR / ".env")
 
 DATA_DIR = BASE_DIR / "data"
 JOBS_DIR = DATA_DIR / "jobs"
-STATIC_DIR = BASE_DIR / "static"
+FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 

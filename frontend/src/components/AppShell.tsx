@@ -38,7 +38,7 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
                 to={it.to}
                 end={it.end}
                 className={({ isActive }) =>
-                  `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  `rounded-lg px-3 py-1.5 text-sm font-medium whitespace-nowrap transition-colors ${
                     isActive
                       ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/40 dark:text-primary-300'
                       : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
