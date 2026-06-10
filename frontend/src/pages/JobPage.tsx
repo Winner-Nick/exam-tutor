@@ -97,9 +97,16 @@ export function JobPage() {
   const questions = job.questions ?? []
   const selected = questions.find((q) => q.id === selectedQid) ?? null
 
+  // 移动端答疑 Tab：隐藏标题与统计，给聊天让出高度（输入框必须可见）
+  const chatActive = mobileTab === 'chat'
+
   return (
-    <div className="space-y-4 pb-16 lg:pb-0">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="space-y-4 pb-20 lg:pb-0">
+      <div
+        className={`flex-wrap items-center justify-between gap-2 ${
+          chatActive ? 'hidden lg:flex' : 'flex'
+        }`}
+      >
         <h2 className="text-lg font-bold">{title}</h2>
         <button
           onClick={() => setShowPaper(true)}
@@ -109,7 +116,9 @@ export function JobPage() {
         </button>
       </div>
 
-      <StatsBar job={job} />
+      <div className={chatActive ? 'hidden lg:block' : ''}>
+        <StatsBar job={job} />
+      </div>
 
       {/* 桌面三栏 / 移动单栏 + 底部 Tab */}
       <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
@@ -137,15 +146,17 @@ export function JobPage() {
 
         <section
           className={`rounded-2xl border border-slate-200 bg-white p-4 lg:h-[640px] dark:border-slate-800 dark:bg-slate-900 ${
-            mobileTab !== 'chat' ? 'hidden lg:block' : 'h-[70vh]'
+            mobileTab !== 'chat'
+              ? 'hidden lg:block'
+              : 'h-[calc(100dvh-10.5rem)] min-h-[320px]'
           }`}
         >
           <ChatPanel jobId={job.id} question={selected} onClearFocus={() => setSelectedQid(null)} />
         </section>
       </div>
 
-      {/* 移动端底部 Tab */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
+      {/* 移动端底部 Tab（pb 适配 iPhone Home 指示条安全区） */}
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
         {(
           [
             { k: 'questions', label: '题目', icon: '🔢' },

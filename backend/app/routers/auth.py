@@ -76,3 +76,10 @@ def create_invite(req: InviteCreateRequest, user: dict = Depends(auth.require_ad
 @admin_router.get("/invites")
 def list_invites(user: dict = Depends(auth.require_admin)):
     return {"invites": store.list_invites()}
+
+
+@admin_router.delete("/invites/{code}")
+def revoke_invite(code: str, user: dict = Depends(auth.require_admin)):
+    if not store.delete_invite(code):
+        raise HTTPException(404, "邀请码不存在")
+    return {"ok": True}

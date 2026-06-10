@@ -80,17 +80,39 @@ def create_invite(created_by: int, max_uses: int = 1, ttl_days: float | None = N
     conn = get_conn()
     with conn:
         conn.execute(
-            "INSERT INTO invite_codes (code, created_by, max_uses, expires_at) VALUES (?, ?, ?, ?)",
-            (code, created_by, max_uses, expires_at),
+            "INSERT INTO invite_codes (code, created_by, max_uses, expires_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (code, created_by, max_uses, expires_at, time.time()),
         )
     return code
 
 
 def list_invites() -> list[dict]:
+    """邀请码列表（带创建者用户名与计算出的状态）。"""
     rows = get_conn().execute(
-        "SELECT * FROM invite_codes ORDER BY rowid DESC LIMIT 50"
+        """SELECT i.*, u.username AS created_by_name
+           FROM invite_codes i LEFT JOIN users u ON u.id = i.created_by
+           ORDER BY i.rowid DESC LIMIT 100"""
     ).fetchall()
-    return [dict(r) for r in rows]
+    now = time.time()
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d["used_count"] >= d["max_uses"]:
+            d["status"] = "used_up"
+        elif d["expires_at"] and d["expires_at"] <= now:
+            d["status"] = "expired"
+        else:
+            d["status"] = "active"
+        out.append(d)
+    return out
+
+
+def delete_invite(code: str) -> bool:
+    conn = get_conn()
+    with conn:
+        cur = conn.execute("DELETE FROM invite_codes WHERE code = ?", (code,))
+    return cur.rowcount > 0
 
 
 def consume_invite(code: str) -> bool:

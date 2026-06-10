@@ -1,4 +1,4 @@
-import type { ChatMessage, Job, Question, JobStats, User } from './types'
+import type { ChatMessage, Invite, Job, Question, JobStats, User } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -43,8 +43,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ old_password, new_password }),
     }),
-  createInvite: () =>
-    request<{ code: string }>('/api/admin/invites', { method: 'POST', body: JSON.stringify({}) }),
+  createInvite: (max_uses: number, ttl_days: number | null) =>
+    request<{ code: string }>('/api/admin/invites', {
+      method: 'POST',
+      body: JSON.stringify({ max_uses, ttl_days }),
+    }),
+  listInvites: () => request<{ invites: Invite[] }>('/api/admin/invites'),
+  revokeInvite: (code: string) =>
+    request<{ ok: boolean }>(`/api/admin/invites/${encodeURIComponent(code)}`, {
+      method: 'DELETE',
+    }),
 
   // jobs
   listJobs: () => request<{ jobs: Job[] }>('/api/jobs'),

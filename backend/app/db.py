@@ -92,7 +92,11 @@ def _v1(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = [_v1]
+def _v2(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE invite_codes ADD COLUMN created_at REAL")
+
+
+MIGRATIONS = [_v1, _v2]
 
 
 def init_db() -> None:

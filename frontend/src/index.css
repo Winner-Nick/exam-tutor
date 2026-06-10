@@ -20,6 +20,15 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/* iOS Safari：输入框字号低于 16px 时聚焦会强制放大页面，触屏设备统一 16px */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 body {
   @apply bg-slate-100 text-slate-800 antialiased dark:bg-slate-950 dark:text-slate-200;
 }

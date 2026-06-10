@@ -63,3 +63,13 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
 }
+
+export interface Invite {
+  code: string
+  created_by_name: string | null
+  max_uses: number
+  used_count: number
+  expires_at: number | null
+  created_at: number | null
+  status: 'active' | 'used_up' | 'expired'
+}
