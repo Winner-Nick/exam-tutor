@@ -50,13 +50,39 @@ def client_ip(request: Request) -> str:
 # 上传校验
 # ---------------------------------------------------------------------------
 
-async def save_upload_pdf(file: UploadFile, dest: Path) -> str:
-    """流式落盘并校验：magic bytes、大小上限、可解析、页数上限。返回 SHA-256。"""
-    max_bytes = settings.max_upload_mb * 1024 * 1024
-    head = await file.read(5)
-    if head != b"%PDF-":
-        raise HTTPException(400, "文件内容不是有效的 PDF")
+def _sniff_ext(head: bytes) -> str | None:
+    """按 magic bytes 判断文件类型，返回扩展名（含点）；不认识返回 None。"""
+    if head.startswith(b"%PDF-"):
+        return ".pdf"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    if head[4:8] == b"ftyp":  # HEIC/HEIF（iPhone 拍照）
+        return ".heic"
+    return None
 
+
+async def save_upload(file: UploadFile, dest_stem: Path,
+                      allow_pdf: bool = True, allow_image: bool = False) -> tuple[Path, str]:
+    """流式落盘并校验（magic bytes、大小上限、可解析）。
+
+    dest_stem 为不含扩展名的目标路径，实际扩展名按内容判定。
+    返回 (落盘路径, SHA-256)。
+    """
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    head = await file.read(12)
+    ext = _sniff_ext(head)
+    if ext == ".pdf" and not allow_pdf:
+        raise HTTPException(400, "此处不支持 PDF 文件")
+    if ext != ".pdf" and not (allow_image and ext):
+        allowed = "PDF" + ("、JPG/PNG/WebP/HEIC 图片" if allow_image else "")
+        raise HTTPException(400, f"文件格式无法识别，请上传 {allowed}")
+
+    dest = dest_stem.with_name(dest_stem.name + ext)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     sha = hashlib.sha256(head)
     size = len(head)
     try:
@@ -68,16 +94,33 @@ async def save_upload_pdf(file: UploadFile, dest: Path) -> str:
                     raise HTTPException(413, f"文件超过 {settings.max_upload_mb}MB 上限")
                 sha.update(chunk)
                 f.write(chunk)
-        try:
-            n = pdf_utils.page_count(dest)
-        except Exception:
-            raise HTTPException(400, "PDF 文件损坏或无法解析") from None
-        if n < 1 or n > settings.max_pages:
-            raise HTTPException(400, f"PDF 页数需在 1-{settings.max_pages} 页之间")
+        if ext == ".pdf":
+            try:
+                n = pdf_utils.page_count(dest)
+            except Exception:
+                raise HTTPException(400, "PDF 文件损坏或无法解析") from None
+            if n < 1 or n > settings.max_pages:
+                raise HTTPException(400, f"PDF 页数需在 1-{settings.max_pages} 页之间")
+        else:
+            from PIL import Image
+
+            try:
+                with Image.open(dest) as img:
+                    img.verify()
+            except Exception:
+                raise HTTPException(400, "图片文件损坏或格式不支持") from None
     except HTTPException:
         dest.unlink(missing_ok=True)
         raise
-    return sha.hexdigest()
+    return dest, sha.hexdigest()
+
+
+async def save_upload_pdf(file: UploadFile, dest: Path) -> str:
+    """旧接口：仅 PDF，固定目标路径。返回 SHA-256。"""
+    saved, sha = await save_upload(file, dest.with_suffix(""), allow_pdf=True, allow_image=False)
+    if saved != dest:
+        saved.rename(dest)
+    return sha
 
 
 # ---------------------------------------------------------------------------

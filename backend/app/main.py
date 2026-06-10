@@ -15,7 +15,9 @@ from .routers import auth as auth_router
 from .routers import chat as chat_router
 from .routers import insights as insights_router
 from .routers import jobs as jobs_router
+from .routers import papers as papers_router
 from .routers import questions as questions_router
+from .routers import students as students_router
 from .security import OriginCheckMiddleware, SecurityHeadersMiddleware
 
 
@@ -36,6 +38,8 @@ app.add_middleware(OriginCheckMiddleware)
 app.include_router(auth_router.router)
 app.include_router(auth_router.admin_router)
 app.include_router(jobs_router.router)
+app.include_router(papers_router.router)
+app.include_router(students_router.router)
 app.include_router(questions_router.router)
 app.include_router(chat_router.router)
 app.include_router(insights_router.router)

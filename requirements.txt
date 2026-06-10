@@ -3,6 +3,7 @@ uvicorn[standard]==0.41.0
 openai==2.24.0
 pymupdf>=1.24
 pillow>=10
+pillow-heif>=0.16  # iPhone HEIC 拍照件
 python-dotenv>=1.0
 python-multipart>=0.0.9
 pyjwt>=2.10

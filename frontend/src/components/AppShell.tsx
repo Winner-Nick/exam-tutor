@@ -6,7 +6,9 @@ import { useUi } from '../store'
 import type { User } from '../types'
 
 const navItems = [
-  { to: '/', label: '试卷', end: true },
+  { to: '/', label: '批改', end: true },
+  { to: '/papers', label: '试卷库' },
+  { to: '/students', label: '学生' },
   { to: '/mistakes', label: '错题本' },
   { to: '/stats', label: '统计' },
   { to: '/settings', label: '设置' },

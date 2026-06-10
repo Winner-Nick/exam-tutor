@@ -33,3 +33,15 @@ class ChangePasswordRequest(BaseModel):
 class InviteCreateRequest(BaseModel):
     max_uses: int = Field(default=1, ge=1, le=100)
     ttl_days: float | None = Field(default=30, gt=0, le=365)
+
+
+class StudentRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
+
+
+class PaperUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+
+
+class PaperAnswerRequest(BaseModel):
+    correct_answer: str | None = Field(default=None, max_length=500)

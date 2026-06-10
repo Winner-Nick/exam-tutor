@@ -8,8 +8,11 @@ import { DashboardPage } from './pages/DashboardPage'
 import { JobPage } from './pages/JobPage'
 import { LoginPage } from './pages/LoginPage'
 import { MistakesPage } from './pages/MistakesPage'
+import { PaperPage } from './pages/PaperPage'
+import { PapersPage } from './pages/PapersPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { StatsPage } from './pages/StatsPage'
+import { StudentsPage } from './pages/StudentsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +49,9 @@ export default function App() {
             <Route element={<Protected />}>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/jobs/:jobId" element={<JobPage />} />
+              <Route path="/papers" element={<PapersPage />} />
+              <Route path="/papers/:paperId" element={<PaperPage />} />
+              <Route path="/students" element={<StudentsPage />} />
               <Route path="/mistakes" element={<MistakesPage />} />
               <Route path="/stats" element={<StatsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

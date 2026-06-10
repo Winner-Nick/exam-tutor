@@ -1,12 +1,11 @@
 import { useEffect } from 'react'
-import { pageImageUrl } from '../api'
 
 export function PaperViewer({
-  jobId,
+  urlFor,
   pageCount,
   onClose,
 }: {
-  jobId: string
+  urlFor: (n: number) => string
   pageCount: number
   onClose: () => void
 }) {
@@ -38,7 +37,7 @@ export function PaperViewer({
         {Array.from({ length: pageCount }, (_, i) => (
           <img
             key={i}
-            src={pageImageUrl(jobId, i + 1)}
+            src={urlFor(i + 1)}
             alt={`第 ${i + 1} 页`}
             loading="lazy"
             className="mx-auto w-full max-w-3xl rounded-lg bg-white shadow-xl"

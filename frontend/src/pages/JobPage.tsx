@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api } from '../api'
+import { api, pageImageUrl } from '../api'
 import { ChatPanel } from '../components/ChatPanel'
 import { DonutChart } from '../components/DonutChart'
 import { PaperViewer } from '../components/PaperViewer'
@@ -107,7 +107,22 @@ export function JobPage() {
           chatActive ? 'hidden lg:flex' : 'flex'
         }`}
       >
-        <h2 className="text-lg font-bold">{title}</h2>
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-bold">{title}</h2>
+          {job.student_name && (
+            <p className="text-xs text-slate-400">
+              👤 {job.student_name}
+              {job.paper_id && (
+                <>
+                  {' · '}
+                  <Link to={`/papers/${job.paper_id}`} className="text-primary-600 hover:underline dark:text-primary-400">
+                    查看试卷与答案
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
+        </div>
         <button
           onClick={() => setShowPaper(true)}
           className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
@@ -178,7 +193,11 @@ export function JobPage() {
       </nav>
 
       {showPaper && job.page_count && (
-        <PaperViewer jobId={job.id} pageCount={job.page_count} onClose={() => setShowPaper(false)} />
+        <PaperViewer
+          urlFor={(n) => pageImageUrl(job.id, n)}
+          pageCount={job.page_count}
+          onClose={() => setShowPaper(false)}
+        />
       )}
     </div>
   )

@@ -96,7 +96,73 @@ def _v2(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE invite_codes ADD COLUMN created_at REAL")
 
 
-MIGRATIONS = [_v1, _v2]
+def _v3(conn: sqlite3.Connection) -> None:
+    """老师-学生-试卷模型：papers 持有题目与标准答案（识别一次复用），
+    jobs 退化为一次"作答提交"（kind=submission），挂在 paper + student 下。"""
+    conn.executescript(
+        """
+        CREATE TABLE students (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            name TEXT NOT NULL,
+            is_self INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX idx_students_user ON students(user_id);
+
+        CREATE TABLE papers (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            title TEXT,
+            status TEXT NOT NULL,
+            stage TEXT,
+            progress_done INTEGER NOT NULL DEFAULT 0,
+            progress_total INTEGER NOT NULL DEFAULT 1,
+            progress_label TEXT,
+            error TEXT,
+            page_count INTEGER,
+            meta_json TEXT,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX idx_papers_user ON papers(user_id, created_at DESC);
+
+        CREATE TABLE paper_files (
+            id TEXT PRIMARY KEY,
+            paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL DEFAULT 'mixed',
+            filename TEXT,
+            sha256 TEXT,
+            page_start INTEGER,
+            page_count INTEGER,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX idx_pfiles_paper ON paper_files(paper_id);
+
+        CREATE TABLE paper_questions (
+            id INTEGER PRIMARY KEY,
+            paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+            qid TEXT NOT NULL,
+            number TEXT,
+            section TEXT,
+            type TEXT,
+            stem TEXT,
+            options_json TEXT,
+            passage TEXT,
+            correct_answer TEXT,
+            knowledge_point TEXT,
+            UNIQUE(paper_id, qid)
+        );
+        CREATE INDEX idx_pq_paper ON paper_questions(paper_id);
+        """
+    )
+    conn.execute("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'")
+    conn.execute("ALTER TABLE jobs ADD COLUMN paper_id TEXT REFERENCES papers(id)")
+    conn.execute("ALTER TABLE jobs ADD COLUMN student_id INTEGER REFERENCES students(id)")
+    conn.execute("CREATE INDEX idx_jobs_paper ON jobs(paper_id)")
+    conn.execute("CREATE INDEX idx_jobs_student ON jobs(student_id)")
+
+
+MIGRATIONS = [_v1, _v2, _v3]
 
 
 def init_db() -> None:

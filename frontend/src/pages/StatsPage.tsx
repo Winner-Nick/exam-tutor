@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { Spinner } from '../components/Spinner'
+import { StudentFilter } from '../components/StudentFilter'
 
 /** 正确率趋势：纯 SVG 折线。 */
 function TrendChart({
@@ -56,7 +58,11 @@ function TrendChart({
 }
 
 export function StatsPage() {
-  const q = useQuery({ queryKey: ['overview'], queryFn: api.overview })
+  const [studentId, setStudentId] = useState<number | null>(null)
+  const q = useQuery({
+    queryKey: ['overview', studentId],
+    queryFn: () => api.overview(studentId),
+  })
 
   if (q.isPending)
     return (
@@ -81,6 +87,9 @@ export function StatsPage() {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <StudentFilter value={studentId} onChange={setStudentId} />
+      </div>
       <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
         <h3 className="mb-3 font-bold">📈 客观题正确率趋势</h3>
         {points.length === 0 ? (
@@ -130,7 +139,12 @@ export function StatsPage() {
                 to={`/jobs/${j.id}`}
                 className="flex items-center justify-between py-2.5 hover:text-primary-600"
               >
-                <span className="truncate">{j.title}</span>
+                <span className="truncate">
+                  {j.title}
+                  {j.student_name && (
+                    <span className="ml-2 text-xs text-slate-400">👤 {j.student_name}</span>
+                  )}
+                </span>
                 <span className="ml-3 shrink-0 text-xs text-slate-400">
                   {new Date(j.created_at * 1000).toLocaleDateString('zh-CN')} ·{' '}
                   {graded > 0 ? `${Math.round(((j.stats.correct ?? 0) / graded) * 100)}%` : '—'}

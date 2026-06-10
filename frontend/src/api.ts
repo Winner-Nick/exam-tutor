@@ -1,4 +1,14 @@
-import type { ChatMessage, Invite, Job, Question, JobStats, User } from './types'
+import type {
+  ChatMessage,
+  Invite,
+  Job,
+  JobStats,
+  Paper,
+  PaperQuestion,
+  Question,
+  Student,
+  User,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -54,14 +64,59 @@ export const api = {
       method: 'DELETE',
     }),
 
-  // jobs
-  listJobs: () => request<{ jobs: Job[] }>('/api/jobs'),
+  // students
+  listStudents: () => request<{ students: Student[] }>('/api/students'),
+  createStudent: (name: string) =>
+    request<Student>('/api/students', { method: 'POST', body: JSON.stringify({ name }) }),
+  renameStudent: (id: number, name: string) =>
+    request<Student>(`/api/students/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  deleteStudent: (id: number) =>
+    request<{ ok: boolean }>(`/api/students/${id}`, { method: 'DELETE' }),
+
+  // papers（试卷库）
+  listPapers: () => request<{ papers: Paper[] }>('/api/papers'),
+  getPaper: (id: string) => request<Paper>(`/api/papers/${id}`),
+  createPaper: (files: File[], title: string | null) => {
+    const fd = new FormData()
+    files.forEach((f) => fd.append('files', f))
+    if (title) fd.append('title', title)
+    return request<{ paper_id: string }>('/api/papers', { method: 'POST', body: fd })
+  },
+  addPaperFiles: (id: string, files: File[], kind: 'answers' | 'questions' | 'mixed') => {
+    const fd = new FormData()
+    files.forEach((f) => fd.append('files', f))
+    fd.append('kind', kind)
+    return request<{ ok: boolean }>(`/api/papers/${id}/files`, { method: 'POST', body: fd })
+  },
+  renamePaper: (id: string, title: string) =>
+    request<Paper>(`/api/papers/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  deletePaper: (id: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}`, { method: 'DELETE' }),
+  reprocessPaper: (id: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}/reprocess`, { method: 'POST', body: '{}' }),
+  setPaperAnswer: (id: string, qid: string, correct_answer: string | null) =>
+    request<{ question: PaperQuestion; regraded: number }>(`/api/papers/${id}/questions/${qid}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ correct_answer }),
+    }),
+
+  // submissions（批改记录，沿用 jobs 资源）
+  listJobs: (studentId?: number | null, paperId?: string | null) => {
+    const p = new URLSearchParams()
+    if (studentId != null) p.set('student_id', String(studentId))
+    if (paperId != null) p.set('paper_id', paperId)
+    const qs = p.toString()
+    return request<{ jobs: Job[] }>(`/api/jobs${qs ? `?${qs}` : ''}`)
+  },
   getJob: (id: string) => request<Job>(`/api/jobs/${id}`),
   deleteJob: (id: string) => request<{ ok: boolean }>(`/api/jobs/${id}`, { method: 'DELETE' }),
-  upload: (file: File) => {
+  createSubmission: (paperId: string, studentId: number, files: File[], usePaperFiles = false) => {
     const fd = new FormData()
-    fd.append('file', file)
-    return request<{ job_id: string }>('/api/upload', { method: 'POST', body: fd })
+    fd.append('paper_id', paperId)
+    fd.append('student_id', String(studentId))
+    files.forEach((f) => fd.append('files', f))
+    if (usePaperFiles) fd.append('use_paper_files', 'true')
+    return request<{ job_id: string }>('/api/submissions', { method: 'POST', body: fd })
   },
 
   // questions
@@ -87,15 +142,22 @@ export const api = {
       `/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`,
     ),
 
-  // 阶段7：聚合
-  mistakes: () => request<{ groups: { knowledge_point: string; questions: (Question & { job_id: string; job_title: string })[] }[] }>('/api/mistakes'),
-  overview: () =>
+  // 聚合（可按学生过滤）
+  mistakes: (studentId?: number | null) =>
+    request<{ groups: { knowledge_point: string; questions: (Question & { job_id: string; job_title: string; student_name: string | null })[] }[] }>(
+      `/api/mistakes${studentId != null ? `?student_id=${studentId}` : ''}`,
+    ),
+  overview: (studentId?: number | null) =>
     request<{
-      jobs: { id: string; title: string; created_at: number; stats: Partial<JobStats> }[]
+      jobs: { id: string; title: string; student_name: string | null; created_at: number; stats: Partial<JobStats> }[]
       knowledge_points: { knowledge_point: string; wrong: number; total: number }[]
-    }>('/api/stats/overview'),
+    }>(`/api/stats/overview${studentId != null ? `?student_id=${studentId}` : ''}`),
 }
 
 export function pageImageUrl(jobId: string, n: number): string {
   return `/api/jobs/${jobId}/page/${n}`
+}
+
+export function paperPageImageUrl(paperId: string, n: number): string {
+  return `/api/papers/${paperId}/page/${n}`
 }

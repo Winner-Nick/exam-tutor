@@ -35,7 +35,11 @@ def start() -> None:
 
 
 def enqueue_job(job_id: str) -> None:
-    _job_q.put(job_id)
+    _job_q.put(("job", job_id))
+
+
+def enqueue_paper(paper_id: str) -> None:
+    _job_q.put(("paper", paper_id))
 
 
 def enqueue_explanations(job_id: str, qids: list[str], priority: int = 1) -> list[str]:
@@ -53,7 +57,9 @@ def enqueue_explanations(job_id: str, qids: list[str], priority: int = 1) -> lis
 
 
 def resume_pending() -> None:
-    """重启续跑：processing 作业重新入队；中断的讲解复位后重新入队。"""
+    """重启续跑：processing 的试卷/作业重新入队；中断的讲解复位后重新入队。"""
+    for paper_id in store.list_processing_paper_ids():
+        enqueue_paper(paper_id)
     for job_id in store.list_processing_job_ids():
         enqueue_job(job_id)
     for job_id, qid in store.reset_stale_explanations():
@@ -66,10 +72,17 @@ def resume_pending() -> None:
 
 def _job_worker() -> None:
     while True:
-        job_id = _job_q.get()
+        kind, item_id = _job_q.get()
         try:
-            pipeline.process_job(job_id)
-        except Exception:  # noqa: BLE001 - process_job 已把错误落库并发事件
+            if kind == "paper":
+                pipeline.process_paper(item_id)
+            else:
+                job = store.get_job(item_id) or {}
+                if job.get("kind") == "submission":
+                    pipeline.process_submission(item_id)
+                else:
+                    pipeline.process_job(item_id)
+        except Exception:  # noqa: BLE001 - 处理函数已把错误落库并发事件
             pass
         finally:
             _job_q.task_done()

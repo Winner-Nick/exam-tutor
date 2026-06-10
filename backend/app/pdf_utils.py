@@ -1,13 +1,20 @@
-"""PDF 处理：把每一页渲染成图片，供视觉模型识别。"""
+"""PDF/图片处理：把每一页（或每张拍照）归一化为页面图，供视觉模型识别。"""
 from __future__ import annotations
 
 import base64
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .config import settings
+
+try:  # iPhone 拍照默认 HEIC，注册后 PIL 可直接打开
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except ImportError:
+    pass
 
 
 def page_count(pdf_path: str | Path) -> int:
@@ -18,6 +25,18 @@ def page_count(pdf_path: str | Path) -> int:
         doc.close()
 
 
+def _normalize(img: Image.Image, max_dim: int, grayscale: bool) -> Image.Image:
+    if max(img.size) > max_dim:
+        scale = max_dim / max(img.size)
+        img = img.resize(
+            (round(img.width * scale), round(img.height * scale)),
+            Image.LANCZOS,
+        )
+    if grayscale:
+        img = img.convert("L")
+    return img
+
+
 def render_pdf_to_images(
     pdf_path: str | Path,
     out_dir: str | Path,
@@ -25,8 +44,9 @@ def render_pdf_to_images(
     max_dim: int | None = None,
     quality: int | None = None,
     grayscale: bool | None = None,
+    start_index: int = 0,
 ) -> list[Path]:
-    """把 PDF 每页渲染为 JPEG。返回图片路径列表（按页序）。
+    """把 PDF 每页渲染为 JPEG（页码从 start_index+1 起）。返回图片路径列表（按页序）。
 
     最长边限制在 max_dim 像素内——这是视觉模型 token 成本的主要杠杆；
     灰度不省 token 但 base64 体积小得多，省内存与带宽。
@@ -44,20 +64,38 @@ def render_pdf_to_images(
         for i, page in enumerate(doc):
             pix = page.get_pixmap(dpi=dpi, alpha=False)
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-            if max(img.size) > max_dim:
-                scale = max_dim / max(img.size)
-                img = img.resize(
-                    (round(img.width * scale), round(img.height * scale)),
-                    Image.LANCZOS,
-                )
-            if grayscale:
-                img = img.convert("L")
-            out = out_dir / f"page_{i + 1:02d}.jpg"
+            img = _normalize(img, max_dim, grayscale)
+            out = out_dir / f"page_{start_index + i + 1:02d}.jpg"
             img.save(out, "JPEG", quality=quality)
             paths.append(out)
     finally:
         doc.close()
     return paths
+
+
+def photo_to_page(
+    src: str | Path,
+    out_dir: str | Path,
+    page_index: int,
+    max_dim: int | None = None,
+    quality: int | None = None,
+) -> Path:
+    """把一张拍照/截图归一化为页面图（EXIF 矫正方向 + 限边长）。
+
+    拍照件不转灰度：彩色笔迹（红笔批改、蓝黑墨水）在灰度下对比度会损失。
+    """
+    max_dim = max_dim or settings.render_max_dim
+    quality = quality or settings.render_quality
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with Image.open(src) as img:
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        img = _normalize(img, max_dim, grayscale=False)
+        out = out_dir / f"page_{page_index:02d}.jpg"
+        img.save(out, "JPEG", quality=quality)
+    return out
 
 
 def is_blank_page(image_path: str | Path, dark_ratio_threshold: float = 0.005) -> bool:

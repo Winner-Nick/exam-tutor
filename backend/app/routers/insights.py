@@ -12,14 +12,17 @@ router = APIRouter(prefix="/api", tags=["insights"])
 
 
 @router.get("/mistakes")
-def mistakes(user: dict = Depends(auth.get_current_user)):
-    rows = get_conn().execute(
-        """SELECT q.*, j.id AS jid, COALESCE(j.title, j.filename, '试卷') AS job_title
-           FROM questions q JOIN jobs j ON j.id = q.job_id
-           WHERE j.user_id = ? AND q.status = 'wrong'
-           ORDER BY j.created_at DESC, q.id""",
-        (user["id"],),
-    ).fetchall()
+def mistakes(student_id: int | None = None, user: dict = Depends(auth.get_current_user)):
+    sql = """SELECT q.*, j.id AS jid, COALESCE(j.title, j.filename, '试卷') AS job_title,
+                    s.name AS student_name
+             FROM questions q JOIN jobs j ON j.id = q.job_id
+             LEFT JOIN students s ON s.id = j.student_id
+             WHERE j.user_id = ? AND q.status = 'wrong'"""
+    params: list = [user["id"]]
+    if student_id is not None:
+        sql += " AND j.student_id = ?"
+        params.append(student_id)
+    rows = get_conn().execute(sql + " ORDER BY j.created_at DESC, q.id", params).fetchall()
 
     groups: dict[str, list[dict]] = {}
     for r in rows:
@@ -28,6 +31,7 @@ def mistakes(user: dict = Depends(auth.get_current_user)):
             "id": r["qid"],
             "job_id": r["jid"],
             "job_title": r["job_title"],
+            "student_name": r["student_name"],
             "number": r["number"],
             "section": r["section"],
             "type": r["type"],
@@ -48,33 +52,40 @@ def mistakes(user: dict = Depends(auth.get_current_user)):
 
 
 @router.get("/stats/overview")
-def overview(user: dict = Depends(auth.get_current_user)):
+def overview(student_id: int | None = None, user: dict = Depends(auth.get_current_user)):
     conn = get_conn()
+    jobs_sql = """SELECT j.id, j.title, j.filename, j.created_at, j.stats_json,
+                         s.name AS student_name
+                  FROM jobs j LEFT JOIN students s ON s.id = j.student_id
+                  WHERE j.user_id = ? AND j.status = 'done'"""
+    kp_sql = """SELECT q.knowledge_point,
+                       SUM(CASE WHEN q.status = 'wrong' THEN 1 ELSE 0 END) AS wrong,
+                       COUNT(*) AS total
+                FROM questions q JOIN jobs j ON j.id = q.job_id
+                WHERE j.user_id = ? AND q.knowledge_point IS NOT NULL"""
+    params: list = [user["id"]]
+    if student_id is not None:
+        jobs_sql += " AND j.student_id = ?"
+        kp_sql += " AND j.student_id = ?"
+        params.append(student_id)
+
     jobs = [
         {
             "id": r["id"],
             "title": r["title"] or r["filename"] or "试卷",
+            "student_name": r["student_name"],
             "created_at": r["created_at"],
             "stats": json.loads(r["stats_json"]) if r["stats_json"] else {},
         }
-        for r in conn.execute(
-            "SELECT id, title, filename, created_at, stats_json FROM jobs "
-            "WHERE user_id = ? AND status = 'done' ORDER BY created_at DESC",
-            (user["id"],),
-        ).fetchall()
+        for r in conn.execute(jobs_sql + " ORDER BY j.created_at DESC", params).fetchall()
     ]
     kps = [
         {"knowledge_point": r["knowledge_point"], "wrong": r["wrong"], "total": r["total"]}
         for r in conn.execute(
-            """SELECT q.knowledge_point,
-                      SUM(CASE WHEN q.status = 'wrong' THEN 1 ELSE 0 END) AS wrong,
-                      COUNT(*) AS total
-               FROM questions q JOIN jobs j ON j.id = q.job_id
-               WHERE j.user_id = ? AND q.knowledge_point IS NOT NULL
-               GROUP BY q.knowledge_point
-               HAVING wrong > 0
-               ORDER BY wrong DESC, total DESC LIMIT 30""",
-            (user["id"],),
+            kp_sql + """ GROUP BY q.knowledge_point
+                         HAVING wrong > 0
+                         ORDER BY wrong DESC, total DESC LIMIT 30""",
+            params,
         ).fetchall()
     ]
     return {"jobs": jobs, "knowledge_points": kps}

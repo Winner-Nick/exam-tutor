@@ -48,6 +48,11 @@ export interface Progress {
 export interface Job {
   id: string
   filename: string | null
+  kind: 'legacy' | 'submission'
+  paper_id: string | null
+  student_id: number | null
+  student_name: string | null
+  paper_title: string | null
   status: 'processing' | 'done' | 'error'
   stage: string | null
   progress: Progress
@@ -57,6 +62,52 @@ export interface Job {
   meta: { title?: string; subject?: string; grade?: string; total_questions?: number }
   stats: Partial<JobStats>
   questions?: Question[]
+}
+
+export interface Student {
+  id: number
+  name: string
+  is_self: 0 | 1
+  created_at: number
+  submission_count: number
+  wrong_total: number | null
+}
+
+export interface PaperQuestion {
+  id: string
+  number: string
+  section: string | null
+  type: string | null
+  stem: string | null
+  options: Record<string, string> | null
+  passage: string | null
+  correct_answer: string | null
+  knowledge_point: string | null
+}
+
+export interface PaperFile {
+  id: string
+  kind: 'mixed' | 'questions' | 'answers'
+  filename: string | null
+  page_start: number | null
+  page_count: number | null
+}
+
+export interface Paper {
+  id: string
+  title: string | null
+  status: 'processing' | 'ready' | 'error'
+  stage: string | null
+  progress: Progress
+  error: string | null
+  page_count: number | null
+  created_at: number
+  meta: { title?: string; total_questions?: number }
+  question_count: number
+  answered_count: number
+  submission_count: number
+  questions?: PaperQuestion[]
+  files?: PaperFile[]
 }
 
 export interface ChatMessage {

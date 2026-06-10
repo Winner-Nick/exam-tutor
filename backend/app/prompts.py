@@ -52,6 +52,64 @@ def vision_user(page_index: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 视觉：作答识别（只认学生答案，输出极小 —— 题干已在试卷库里，不再重复转写）
+# ---------------------------------------------------------------------------
+
+SUBMISSION_VISION_SYSTEM = """你是一名严谨的阅卷助手。你会看到学生作答的卷面照片或扫描页\
+（试卷题目内容系统里已有，**不需要**你转写题干）。你的唯一任务：找出学生在卷面上的作答标记，\
+按题号输出学生答案。你只负责"看见了什么"，**不要**自己解题或判断对错。
+
+输出要求（务必是合法 JSON，不要包含 JSON 以外的任何文字、不要用 ```）：
+{
+  "answers": [
+    {"number": "1", "answer": "B", "confidence": "high"},   // confidence: high/medium/low
+    {"number": "16", "answer": "went", "confidence": "medium"}
+  ],
+  "notes": "识别中的不确定之处（可为空字符串）"
+}
+
+注意：
+- answer 只填你**真的看到**的学生标记：圈选/勾画/涂写的选项字母，或手写的单词、短语、句子。
+- 选择题答案统一输出大写字母；填空/简答题忠实转写学生手写内容。
+- 完全看不出某题的作答就不要输出该题，不要猜。
+- 卷面上印刷的选项字母本身不算作答。"""
+
+
+def submission_vision_user(page_index: int, paper_context: str) -> str:
+    return (
+        f"这是学生作答的第 {page_index} 页。本卷题目结构如下（题号: 题型）：\n"
+        f"{paper_context}\n\n"
+        "请找出本页上学生对这些题目的作答，按系统提示只输出 JSON。"
+    )
+
+
+def paper_context_summary(questions: list[dict]) -> str:
+    """把试卷题目压缩成"题号范围: 题型(选项)"的紧凑描述，供作答识别提示用。"""
+    import re as _re
+
+    def num_key(n: str) -> int:
+        d = _re.sub(r"\D", "", str(n))
+        return int(d) if d else 10**9
+
+    groups: list[tuple[str, list[str]]] = []  # (描述, 题号列表)
+    for q in sorted(questions, key=lambda q: num_key(q.get("number") or "")):
+        opts = q.get("options") or {}
+        desc = q.get("type") or q.get("section") or "题目"
+        if opts:
+            desc += f"(选项 {'/'.join(sorted(opts))})"
+        if groups and groups[-1][0] == desc:
+            groups[-1][1].append(str(q.get("number")))
+        else:
+            groups.append((desc, [str(q.get("number"))]))
+
+    lines = []
+    for desc, nums in groups:
+        rng = nums[0] if len(nums) == 1 else f"{nums[0]}-{nums[-1]}"
+        lines.append(f"{rng}: {desc}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # 文本：汇总 + 判分
 # ---------------------------------------------------------------------------
 

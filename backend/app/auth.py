@@ -90,3 +90,17 @@ def get_owned_job(job_id: str, user: dict = Depends(get_current_user)) -> dict:
     if not job or job["user_id"] != user["id"]:
         raise HTTPException(404, "作业不存在")
     return job
+
+
+def get_owned_paper(paper_id: str, user: dict = Depends(get_current_user)) -> dict:
+    paper = store.get_paper(paper_id)
+    if not paper or paper["user_id"] != user["id"]:
+        raise HTTPException(404, "试卷不存在")
+    return paper
+
+
+def get_owned_student(student_id: int, user: dict = Depends(get_current_user)) -> dict:
+    student = store.get_student(student_id)
+    if not student or student["user_id"] != user["id"]:
+        raise HTTPException(404, "学生不存在")
+    return student

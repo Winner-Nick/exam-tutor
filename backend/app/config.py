@@ -10,10 +10,13 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(BASE_DIR / ".env")
 
-DATA_DIR = BASE_DIR / "data"
+DATA_DIR = Path(os.getenv("EXAMTUTOR_DATA_DIR") or (BASE_DIR / "data"))
 JOBS_DIR = DATA_DIR / "jobs"
+PAPERS_DIR = DATA_DIR / "papers"
+VISION_CACHE_DIR = DATA_DIR / "vision_cache"  # 按文件 sha 缓存视觉识别结果，跨试卷/作答复用
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
-JOBS_DIR.mkdir(parents=True, exist_ok=True)
+for _d in (JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass(frozen=True)

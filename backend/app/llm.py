@@ -62,20 +62,30 @@ def _retry(fn: Callable[[], Any], tries: int = 3, base_delay: float = 2.0) -> An
 # 视觉：单页识别
 # ---------------------------------------------------------------------------
 
-def vision_extract_page(data_url: str, page_index: int) -> dict:
-    """用 Gemini 识别一页扫描图，返回结构化 dict。"""
+def vision_extract_page(
+    data_url: str,
+    page_index: int,
+    system: str | None = None,
+    user: str | None = None,
+    max_tokens: int = 6000,
+) -> dict:
+    """用 Gemini 识别一页扫描图，返回结构化 dict。
+
+    默认用全量转写提示（试卷入库）；传入 system/user 可改用其他提示
+    （如作答识别的小输出提示，节省 8 倍价的输出 token）。
+    """
 
     def call() -> str:
         resp = _vision_client.chat.completions.create(
             model=settings.vision_model,
             temperature=0,
-            max_tokens=6000,
+            max_tokens=max_tokens,
             messages=[
-                {"role": "system", "content": prompts.VISION_SYSTEM},
+                {"role": "system", "content": system or prompts.VISION_SYSTEM},
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompts.vision_user(page_index)},
+                        {"type": "text", "text": user or prompts.vision_user(page_index)},
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
                 },
@@ -85,7 +95,6 @@ def vision_extract_page(data_url: str, page_index: int) -> dict:
 
     raw = _retry(call)
     data = _extract_json(raw)
-    data.setdefault("page", page_index)
     data["page"] = page_index
     return data
 
@@ -93,6 +102,9 @@ def vision_extract_page(data_url: str, page_index: int) -> dict:
 def vision_extract_pages(
     pages: list[tuple[int, str]],
     on_progress: Callable[[int, int], None] | None = None,
+    system: str | None = None,
+    user_builder: Callable[[int], str] | None = None,
+    max_tokens: int = 6000,
 ) -> list[dict]:
     """并发识别多页。pages 为 [(page_index, data_url), ...]，返回按页序排列的结果。"""
     results: dict[int, dict] = {}
@@ -100,7 +112,11 @@ def vision_extract_pages(
     total = len(pages)
     with ThreadPoolExecutor(max_workers=settings.vision_concurrency) as pool:
         futures = {
-            pool.submit(vision_extract_page, url, idx): idx for idx, url in pages
+            pool.submit(
+                vision_extract_page, url, idx, system,
+                user_builder(idx) if user_builder else None, max_tokens,
+            ): idx
+            for idx, url in pages
         }
         for fut in as_completed(futures):
             idx = futures[fut]
@@ -112,6 +128,7 @@ def vision_extract_pages(
                     "page_role": ["other"],
                     "raw_text": "",
                     "questions": [],
+                    "answers": [],
                     "answer_key": {},
                     "error": f"{type(exc).__name__}: {exc}",
                 }

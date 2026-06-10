@@ -4,33 +4,38 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { Markdown } from '../components/Markdown'
 import { Spinner } from '../components/Spinner'
+import { StudentFilter } from '../components/StudentFilter'
 
 export function MistakesPage() {
-  const q = useQuery({ queryKey: ['mistakes'], queryFn: api.mistakes })
+  const [studentId, setStudentId] = useState<number | null>(null)
+  const q = useQuery({
+    queryKey: ['mistakes', studentId],
+    queryFn: () => api.mistakes(studentId),
+  })
   const [open, setOpen] = useState<string | null>(null)
 
-  if (q.isPending)
-    return (
-      <div className="flex justify-center py-16">
-        <Spinner className="h-7 w-7" />
-      </div>
-    )
-  if (q.isError) return <p className="py-16 text-center text-slate-400">加载失败，请刷新重试</p>
-
-  const groups = q.data.groups
-  if (groups.length === 0)
-    return (
-      <div className="py-16 text-center text-slate-400">
-        <p className="text-3xl">🎉</p>
-        <p className="mt-2">错题本是空的，太棒了！</p>
-      </div>
-    )
+  const groups = q.data?.groups ?? []
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-500 dark:text-slate-400">
-        按知识点汇总所有试卷的错题，温故知新。
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          按知识点汇总所有试卷的错题，温故知新。
+        </p>
+        <StudentFilter value={studentId} onChange={setStudentId} />
+      </div>
+      {q.isPending ? (
+        <div className="flex justify-center py-16">
+          <Spinner className="h-7 w-7" />
+        </div>
+      ) : q.isError ? (
+        <p className="py-16 text-center text-slate-400">加载失败，请刷新重试</p>
+      ) : groups.length === 0 ? (
+        <div className="py-16 text-center text-slate-400">
+          <p className="text-3xl">🎉</p>
+          <p className="mt-2">错题本是空的，太棒了！</p>
+        </div>
+      ) : null}
       {groups.map((g) => (
         <div
           key={g.knowledge_point}
@@ -59,6 +64,7 @@ export function MistakesPage() {
                     <Link to={`/jobs/${mq.job_id}`} className="text-primary-600 hover:underline dark:text-primary-400">
                       {mq.job_title}
                     </Link>
+                    {mq.student_name && <span>👤 {mq.student_name}</span>}
                     <span>第 {mq.number} 题</span>
                     {mq.student_answer && mq.correct_answer && (
                       <span>
