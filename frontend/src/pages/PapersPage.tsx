@@ -154,7 +154,7 @@ export function PapersPage() {
       ) : papers.data.papers.length === 0 ? (
         <p className="py-12 text-center text-slate-400">试卷库是空的，先录入一份试卷吧</p>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {papers.data.papers.map((p) => (
             <div
               key={p.id}

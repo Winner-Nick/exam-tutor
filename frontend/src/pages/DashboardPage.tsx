@@ -324,7 +324,7 @@ export function DashboardPage() {
         ) : jobs.data.jobs.length === 0 ? (
           <p className="py-12 text-center text-slate-400">还没有批改记录</p>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {jobs.data.jobs.map((j) => (
               <JobCard
                 key={j.id}

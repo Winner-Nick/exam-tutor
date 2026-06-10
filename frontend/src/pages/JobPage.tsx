@@ -195,7 +195,7 @@ export function JobPage() {
       </div>
 
       {/* 桌面三栏 / 移动单栏 + 底部 Tab */}
-      <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
         <section
           className={`rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 ${
             mobileTab !== 'questions' ? 'hidden lg:block' : ''
