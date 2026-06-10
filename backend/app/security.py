@@ -138,6 +138,8 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path = scope.get("path", "")
+
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
@@ -149,6 +151,17 @@ class SecurityHeadersMiddleware:
                         "default-src 'self'; img-src 'self' data:; "
                         "style-src 'self' 'unsafe-inline'"
                     )
+                # 缓存策略：带内容哈希的产物永久缓存；HTML/manifest 每次回源校验，
+                # 否则 WebView/手机浏览器可能长期用旧页面（部署后用户看不到更新）
+                if "cache-control" not in headers:
+                    if path.startswith("/assets/"):
+                        headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                    elif path.startswith("/icons/"):
+                        headers["Cache-Control"] = "public, max-age=86400"
+                    elif headers.get("content-type", "").startswith(
+                        ("text/html", "application/manifest")
+                    ):
+                        headers["Cache-Control"] = "no-cache"
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
