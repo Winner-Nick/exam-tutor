@@ -61,6 +61,11 @@ if (FRONTEND_DIST / "assets").exists():
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str):
+    # dist 根下的真实静态文件（manifest、图标等）直接返回；其余走 SPA fallback
+    if path and ".." not in path:
+        f = FRONTEND_DIST / path
+        if f.is_file():
+            return FileResponse(f)
     index = FRONTEND_DIST / "index.html"
     if not index.exists():
         return JSONResponse({"detail": "前端未构建：请先在 frontend/ 运行 npm run build"}, status_code=503)
