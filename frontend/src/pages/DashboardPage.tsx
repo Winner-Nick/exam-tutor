@@ -5,6 +5,7 @@ import { api, ApiError } from '../api'
 import { DonutChart } from '../components/DonutChart'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
+import { compressPicked } from '../utils/compressImage'
 import type { Job } from '../types'
 
 function JobCard({ job, onDelete }: { job: Job; onDelete: () => void }) {
@@ -152,8 +153,8 @@ export function DashboardPage() {
   const readyPapers = (papers.data?.papers ?? []).filter((p) => p.status === 'ready')
   const canSubmit = !!paperId && studentId != null && (usePaperFiles || files.length > 0)
 
-  function addFiles(list: FileList | null) {
-    const fs = Array.from(list ?? [])
+  async function addFiles(list: FileList | null) {
+    const fs = await compressPicked(list)
     if (fs.length) setFiles((old) => [...old, ...fs].slice(0, 12))
   }
 

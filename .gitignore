@@ -16,3 +16,7 @@ data/
 .DS_Store
 .vscode/
 *.log
+
+# 本地备份
+.env.*
+!.env.example

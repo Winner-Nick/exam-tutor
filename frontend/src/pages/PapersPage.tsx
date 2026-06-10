@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
+import { compressPicked } from '../utils/compressImage'
 import type { Paper } from '../types'
 
 function PaperStatus({ paper }: { paper: Paper }) {
@@ -136,10 +137,10 @@ export function PapersPage() {
           multiple
           accept=".pdf,application/pdf,image/*"
           className="hidden"
-          onChange={(e) => {
-            const fs = Array.from(e.target.files ?? [])
-            if (fs.length) setPendingFiles((old) => [...old, ...fs].slice(0, 5))
+          onChange={async (e) => {
+            const fs = await compressPicked(e.target.files)
             e.target.value = ''
+            if (fs.length) setPendingFiles((old) => [...old, ...fs].slice(0, 5))
           }}
         />
       </div>

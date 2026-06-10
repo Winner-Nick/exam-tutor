@@ -12,6 +12,7 @@ import { StageStepper } from '../components/StageStepper'
 import { useToast } from '../components/Toast'
 import { useJobEvents } from '../hooks/useJobEvents'
 import { useUi } from '../store'
+import { compressPicked } from '../utils/compressImage'
 import type { Job } from '../types'
 
 function StatsBar({ job }: { job: Job }) {
@@ -111,10 +112,10 @@ export function JobPage() {
                 multiple
                 accept=".pdf,application/pdf,image/*"
                 className="hidden"
-                onChange={(e) => {
-                  const fs = Array.from(e.target.files ?? [])
-                  if (fs.length) addFiles.mutate(fs)
+                onChange={async (e) => {
+                  const fs = await compressPicked(e.target.files)
                   e.target.value = ''
+                  if (fs.length) addFiles.mutate(fs)
                 }}
               />
             </label>
@@ -182,10 +183,10 @@ export function JobPage() {
         multiple
         accept=".pdf,application/pdf,image/*"
         className="hidden"
-        onChange={(e) => {
-          const fs = Array.from(e.target.files ?? [])
-          if (fs.length) addFiles.mutate(fs)
+        onChange={async (e) => {
+          const fs = await compressPicked(e.target.files)
           e.target.value = ''
+          if (fs.length) addFiles.mutate(fs)
         }}
       />
 

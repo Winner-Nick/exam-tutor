@@ -5,6 +5,7 @@ import { api, ApiError, paperPageImageUrl } from '../api'
 import { PaperViewer } from '../components/PaperViewer'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
+import { compressPicked } from '../utils/compressImage'
 import type { Paper, PaperQuestion } from '../types'
 
 function AnswerCell({ paper, q }: { paper: Paper; q: PaperQuestion }) {
@@ -257,10 +258,10 @@ export function PaperPage() {
         multiple
         accept=".pdf,application/pdf,image/*"
         className="hidden"
-        onChange={(e) => {
-          const fs = Array.from(e.target.files ?? [])
-          if (fs.length) addAnswers.mutate(fs.slice(0, 5))
+        onChange={async (e) => {
+          const fs = await compressPicked(e.target.files)
           e.target.value = ''
+          if (fs.length) addAnswers.mutate(fs.slice(0, 5))
         }}
       />
 
