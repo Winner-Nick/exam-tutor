@@ -162,7 +162,12 @@ def _v3(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX idx_jobs_student ON jobs(student_id)")
 
 
-MIGRATIONS = [_v1, _v2, _v3]
+def _v4(conn: sqlite3.Connection) -> None:
+    """questions.overridden：老师人工修正过的答案/判定，补拍重跑时不被覆盖。"""
+    conn.execute("ALTER TABLE questions ADD COLUMN overridden INTEGER NOT NULL DEFAULT 0")
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4]
 
 
 def init_db() -> None:

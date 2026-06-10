@@ -98,8 +98,11 @@ def photo_to_page(
     return out
 
 
-def is_blank_page(image_path: str | Path, dark_ratio_threshold: float = 0.005) -> bool:
-    """近似空白页判定：缩样后非白像素占比低于阈值。空白页直接跳过视觉识别。"""
+def is_blank_page(image_path: str | Path, dark_ratio_threshold: float = 0.0008) -> bool:
+    """近似空白页判定：缩样后非白像素占比低于阈值。空白页直接跳过视觉识别。
+
+    阈值要足够保守：内容稀疏的"参考答案"页可能只有 0.3% 非白像素，
+    渲染出的真空白页则接近 0。宁可多花一次识别也不能漏页。"""
     with Image.open(image_path) as img:
         g = img.convert("L")
         g.thumbnail((256, 256))

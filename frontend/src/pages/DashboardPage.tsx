@@ -235,6 +235,9 @@ export function DashboardPage() {
         <div>
           <p className="mb-2 flex items-center gap-2 text-sm font-medium">
             <span className={stepBadge}>3</span> 上传做题结果
+            <span className="text-xs font-normal text-slate-400">
+              可以先拍一部分，之后在批改结果页随时「补拍补传」
+            </span>
           </p>
           <div className="flex flex-wrap gap-2">
             <button

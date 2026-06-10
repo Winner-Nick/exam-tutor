@@ -84,6 +84,33 @@ async def create_submission(
     return {"job_id": job_id}
 
 
+@router.post("/jobs/{job_id}/files", status_code=202)
+async def add_submission_files(
+    files: list[UploadFile] = File(...),
+    job: dict = Depends(auth.get_owned_job),
+):
+    """补拍补传：往已有批改记录追加照片/PDF，整体重新汇总判分。
+    已识别过的文件命中缓存不重复花钱；人工修正过的题保留。"""
+    if job["kind"] != "submission":
+        raise HTTPException(400, "旧版记录不支持补传")
+    if job["status"] == "processing":
+        raise HTTPException(409, "正在处理中，请稍后再补传")
+    manifest = store.job_files(job["id"])
+    if not files or len(manifest) + len(files) > MAX_FILES_PER_SUBMISSION:
+        raise HTTPException(400, f"文件总数不能超过 {MAX_FILES_PER_SUBMISSION} 个")
+
+    for f in files:
+        fid = store.new_job_id()
+        dest_stem = store.job_dir(job["id"]) / "files" / fid
+        _, sha = await security.save_upload(f, dest_stem, allow_pdf=True, allow_image=True)
+        manifest.append({"id": fid, "filename": f.filename, "sha256": sha})
+    store.save_job_files(job["id"], manifest)
+    store.update_job(job["id"], status="processing", stage="queued", error=None,
+                     progress_done=0, progress_total=1, progress_label="排队中…")
+    workers.enqueue_job(job["id"])
+    return {"ok": True, "file_count": len(manifest)}
+
+
 @router.get("/jobs")
 def list_jobs(student_id: int | None = None, paper_id: str | None = None,
               user: dict = Depends(auth.get_current_user)):

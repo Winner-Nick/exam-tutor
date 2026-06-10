@@ -334,6 +334,7 @@ def _q_row_to_dict(row) -> dict:
         "knowledge_point": row["knowledge_point"],
         "explanation": json.loads(row["explanation_json"]) if row["explanation_json"] else None,
         "explain_state": row["explain_state"],
+        "overridden": bool(row["overridden"]) if "overridden" in row.keys() else False,
     }
 
 
@@ -344,8 +345,8 @@ def replace_questions(job_id: str, questions: list[dict]) -> None:
         conn.executemany(
             """INSERT INTO questions (job_id, qid, number, section, type, stem,
                    options_json, passage, student_answer, correct_answer, status,
-                   knowledge_point, explanation_json, explain_state)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   knowledge_point, explanation_json, explain_state, overridden)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     job_id, q["id"], q.get("number"), q.get("section"), q.get("type"),
@@ -355,6 +356,7 @@ def replace_questions(job_id: str, questions: list[dict]) -> None:
                     q.get("status") or "unknown", q.get("knowledge_point"),
                     json.dumps(q["explanation"], ensure_ascii=False) if q.get("explanation") else None,
                     q.get("explain_state") or ("done" if q.get("explanation") else "none"),
+                    1 if q.get("overridden") else 0,
                 )
                 for q in questions
             ],
@@ -377,7 +379,7 @@ def get_question(job_id: str, qid: str) -> dict | None:
 
 _Q_FIELDS = {
     "student_answer", "correct_answer", "status", "knowledge_point",
-    "explanation_json", "explain_state",
+    "explanation_json", "explain_state", "overridden",
 }
 
 
@@ -711,6 +713,28 @@ def get_paper_question(paper_id: str, qid: str) -> dict | None:
         "SELECT * FROM paper_questions WHERE paper_id = ? AND qid = ?", (paper_id, qid)
     ).fetchone()
     return _pq_row_to_dict(row) if row else None
+
+
+def add_paper_question(paper_id: str, number: str, correct_answer: str | None,
+                       qtype: str | None) -> dict | None:
+    qid = "q" + number
+    conn = get_conn()
+    with conn:
+        conn.execute(
+            """INSERT INTO paper_questions (paper_id, qid, number, type, correct_answer)
+               VALUES (?, ?, ?, ?, ?)""",
+            (paper_id, qid, number, qtype, correct_answer),
+        )
+    return get_paper_question(paper_id, qid)
+
+
+def delete_paper_question(paper_id: str, qid: str) -> bool:
+    conn = get_conn()
+    with conn:
+        cur = conn.execute(
+            "DELETE FROM paper_questions WHERE paper_id = ? AND qid = ?", (paper_id, qid)
+        )
+    return cur.rowcount > 0
 
 
 def update_paper_question_answer(paper_id: str, qid: str, correct_answer: str | None) -> None:

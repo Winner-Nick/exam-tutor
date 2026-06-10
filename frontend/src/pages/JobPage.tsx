@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, pageImageUrl } from '../api'
+import { api, ApiError, pageImageUrl } from '../api'
 import { ChatPanel } from '../components/ChatPanel'
 import { DonutChart } from '../components/DonutChart'
 import { PaperViewer } from '../components/PaperViewer'
@@ -9,6 +9,7 @@ import { QuestionDetail } from '../components/QuestionDetail'
 import { QuestionGrid } from '../components/QuestionGrid'
 import { Spinner } from '../components/Spinner'
 import { StageStepper } from '../components/StageStepper'
+import { useToast } from '../components/Toast'
 import { useJobEvents } from '../hooks/useJobEvents'
 import { useUi } from '../store'
 import type { Job } from '../types'
@@ -31,9 +32,22 @@ function StatsBar({ job }: { job: Job }) {
 
 export function JobPage() {
   const { jobId } = useParams<{ jobId: string }>()
+  const qc = useQueryClient()
+  const toast = useToast()
   const { selectedQid, setSelectedQid, mobileTab, setMobileTab, setFilter } = useUi()
   const [showPaper, setShowPaper] = useState(false)
+  const moreFilesRef = useRef<HTMLInputElement>(null)
   const { sseDown } = useJobEvents(jobId)
+
+  const addFiles = useMutation({
+    mutationFn: (files: File[]) => api.addSubmissionFiles(jobId!, files),
+    onSuccess: () => {
+      toast('已上传，正在重新识别判分')
+      qc.invalidateQueries({ queryKey: ['job', jobId] })
+      qc.invalidateQueries({ queryKey: ['jobs'] })
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : '上传失败', 'error'),
+  })
 
   const jobQ = useQuery({
     queryKey: ['job', jobId],
@@ -88,9 +102,27 @@ export function JobPage() {
         <p className="text-3xl">😵</p>
         <p className="mt-3 font-medium">处理失败</p>
         <p className="mt-1 text-sm text-slate-400">{job.error}</p>
-        <Link to="/" className="mt-4 inline-block text-sm text-primary-600">
-          返回重新上传
-        </Link>
+        <div className="mt-4 flex justify-center gap-3 text-sm">
+          {job.kind === 'submission' && (
+            <label className="cursor-pointer rounded-xl bg-primary-600 px-4 py-2 font-medium text-white hover:bg-primary-700">
+              {addFiles.isPending ? '上传中…' : '📷 重新拍照上传'}
+              <input
+                type="file"
+                multiple
+                accept=".pdf,application/pdf,image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const fs = Array.from(e.target.files ?? [])
+                  if (fs.length) addFiles.mutate(fs)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+          )}
+          <Link to="/" className="self-center text-primary-600">
+            返回首页
+          </Link>
+        </div>
       </div>
     )
   }
@@ -124,13 +156,38 @@ export function JobPage() {
             </p>
           )}
         </div>
-        <button
-          onClick={() => setShowPaper(true)}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
-        >
-          📖 查看原卷
-        </button>
+        <div className="flex shrink-0 gap-2">
+          {job.kind === 'submission' && (
+            <button
+              onClick={() => moreFilesRef.current?.click()}
+              disabled={addFiles.isPending}
+              title="还有没拍的页面？继续拍照补传，已识别的部分不会丢"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
+            >
+              {addFiles.isPending ? '上传中…' : '📷 补拍补传'}
+            </button>
+          )}
+          <button
+            onClick={() => setShowPaper(true)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
+          >
+            📖 查看原卷
+          </button>
+        </div>
       </div>
+
+      <input
+        ref={moreFilesRef}
+        type="file"
+        multiple
+        accept=".pdf,application/pdf,image/*"
+        className="hidden"
+        onChange={(e) => {
+          const fs = Array.from(e.target.files ?? [])
+          if (fs.length) addFiles.mutate(fs)
+          e.target.value = ''
+        }}
+      />
 
       <div className={chatActive ? 'hidden lg:block' : ''}>
         <StatsBar job={job} />

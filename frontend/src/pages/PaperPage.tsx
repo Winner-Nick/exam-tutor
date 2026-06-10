@@ -38,6 +38,57 @@ function AnswerCell({ paper, q }: { paper: Paper; q: PaperQuestion }) {
   )
 }
 
+function AddQuestionRow({ paperId }: { paperId: string }) {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [number, setNumber] = useState('')
+  const [answer, setAnswer] = useState('')
+
+  const add = useMutation({
+    mutationFn: () =>
+      api.addPaperQuestion(paperId, { number: number.trim(), correct_answer: answer.trim() || null }),
+    onSuccess: () => {
+      setNumber('')
+      setAnswer('')
+      qc.invalidateQueries({ queryKey: ['paper', paperId] })
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : '添加失败', 'error'),
+  })
+
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2.5 dark:border-slate-800"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (number.trim()) add.mutate()
+      }}
+    >
+      <input
+        value={number}
+        onChange={(e) => setNumber(e.target.value)}
+        placeholder="题号"
+        maxLength={10}
+        className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-800"
+      />
+      <input
+        value={answer}
+        onChange={(e) => setAnswer(e.target.value)}
+        placeholder="标准答案"
+        maxLength={100}
+        className="w-36 rounded-lg border border-slate-200 px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-800"
+      />
+      <button
+        type="submit"
+        disabled={!number.trim() || add.isPending}
+        className="rounded-lg bg-slate-100 px-3 py-1 text-sm font-medium hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800"
+      >
+        ＋ 添加题目
+      </button>
+      <span className="text-xs text-slate-400">识别漏了题，或只有答案没有卷子时手动录入</span>
+    </form>
+  )
+}
+
 export function PaperPage() {
   const { paperId } = useParams<{ paperId: string }>()
   const qc = useQueryClient()
@@ -45,6 +96,7 @@ export function PaperPage() {
   const navigate = useNavigate()
   const answersRef = useRef<HTMLInputElement>(null)
   const [showPages, setShowPages] = useState(false)
+  const [editingTitle, setEditingTitle] = useState<string | null>(null)
 
   const paperQ = useQuery({
     queryKey: ['paper', paperId],
@@ -67,6 +119,22 @@ export function PaperPage() {
     mutationFn: () => api.reprocessPaper(paperId!),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['paper', paperId] }),
     onError: (e) => toast(e instanceof ApiError ? e.message : '操作失败', 'error'),
+  })
+
+  const rename = useMutation({
+    mutationFn: (title: string) => api.renamePaper(paperId!, title),
+    onSuccess: () => {
+      setEditingTitle(null)
+      qc.invalidateQueries({ queryKey: ['paper', paperId] })
+      qc.invalidateQueries({ queryKey: ['papers'] })
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : '改名失败', 'error'),
+  })
+
+  const delQuestion = useMutation({
+    mutationFn: (qid: string) => api.deletePaperQuestion(paperId!, qid),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['paper', paperId] }),
+    onError: (e) => toast(e instanceof ApiError ? e.message : '删除失败', 'error'),
   })
 
   if (paperQ.isPending)
@@ -118,20 +186,55 @@ export function PaperPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="truncate text-lg font-bold">{paper.title || '试卷'}</h2>
+        <div className="min-w-0 flex-1">
+          {editingTitle !== null ? (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (editingTitle.trim()) rename.mutate(editingTitle.trim())
+              }}
+            >
+              <input
+                value={editingTitle}
+                onChange={(e) => setEditingTitle(e.target.value)}
+                autoFocus
+                maxLength={80}
+                className="w-full max-w-sm rounded-lg border border-slate-300 px-2 py-1 text-base font-bold dark:border-slate-700 dark:bg-slate-800"
+              />
+              <button type="submit" disabled={rename.isPending} className="shrink-0 text-sm text-primary-600">
+                保存
+              </button>
+              <button type="button" onClick={() => setEditingTitle(null)} className="shrink-0 text-sm text-slate-400">
+                取消
+              </button>
+            </form>
+          ) : (
+            <h2 className="flex items-center gap-1.5 text-lg font-bold">
+              <span className="truncate">{paper.title || '试卷'}</span>
+              <button
+                onClick={() => setEditingTitle(paper.title || '')}
+                title="修改试卷名称"
+                className="shrink-0 rounded p-0.5 text-sm text-slate-300 hover:text-slate-500"
+              >
+                ✏️
+              </button>
+            </h2>
+          )}
           <p className="text-xs text-slate-400">
-            {paper.page_count} 页 · {questions.length} 题
+            {paper.page_count ? `${paper.page_count} 页 · ` : ''}{questions.length} 题
             {paper.submission_count > 0 && ` · 已批改 ${paper.submission_count} 次`}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => setShowPages(true)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
-          >
-            📖 查看原卷
-          </button>
+          {!!paper.page_count && (
+            <button
+              onClick={() => setShowPages(true)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
+            >
+              📖 查看原卷
+            </button>
+          )}
           <button
             onClick={() => answersRef.current?.click()}
             disabled={addAnswers.isPending}
@@ -175,6 +278,7 @@ export function PaperPage() {
               <th className="px-3 py-2 font-medium">题型</th>
               <th className="hidden px-3 py-2 font-medium sm:table-cell">题干</th>
               <th className="w-32 px-3 py-2 font-medium">标准答案</th>
+              <th className="w-8 px-1 py-2"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
@@ -196,18 +300,37 @@ export function PaperPage() {
                 <td className="px-3 py-1.5">
                   <AnswerCell paper={paper} q={q} />
                 </td>
+                <td className="px-1 py-1.5">
+                  <button
+                    onClick={() => {
+                      if (confirm(`确定删除第 ${q.number} 题吗？`)) delQuestion.mutate(q.id)
+                    }}
+                    title="删除此题"
+                    className="rounded p-1 text-slate-200 hover:text-rose-500 dark:text-slate-700 dark:hover:text-rose-400"
+                  >
+                    ✕
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
         {questions.length === 0 && (
-          <p className="py-10 text-center text-sm text-slate-400">
-            没有识别到题目，请检查上传的文件或
-            <button onClick={() => reprocess.mutate()} className="text-primary-600">
-              重新识别
-            </button>
+          <p className="py-8 text-center text-sm text-slate-400">
+            {paper.files && paper.files.length > 0 ? (
+              <>
+                没有识别到题目，请检查上传的文件或
+                <button onClick={() => reprocess.mutate()} className="mx-1 text-primary-600">
+                  重新识别
+                </button>
+                ，也可以在下方手动录入
+              </>
+            ) : (
+              '手动录入题号和标准答案（适合只有答案没有卷子的情况）'
+            )}
           </p>
         )}
+        <AddQuestionRow paperId={paper.id} />
       </div>
 
       <p className="text-xs text-slate-400">

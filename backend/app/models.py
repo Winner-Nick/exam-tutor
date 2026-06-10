@@ -45,3 +45,9 @@ class PaperUpdateRequest(BaseModel):
 
 class PaperAnswerRequest(BaseModel):
     correct_answer: str | None = Field(default=None, max_length=500)
+
+
+class PaperQuestionCreateRequest(BaseModel):
+    number: str = Field(min_length=1, max_length=10, pattern=r"^[0-9A-Za-z（）()．.\-]+$")
+    correct_answer: str | None = Field(default=None, max_length=500)
+    type: str | None = Field(default=None, max_length=20)

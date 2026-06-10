@@ -90,6 +90,18 @@ export const api = {
   },
   renamePaper: (id: string, title: string) =>
     request<Paper>(`/api/papers/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  createManualPaper: (title: string) =>
+    request<{ paper_id: string }>('/api/papers/manual', {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  addPaperQuestion: (id: string, body: { number: string; correct_answer?: string | null; type?: string | null }) =>
+    request<PaperQuestion>(`/api/papers/${id}/questions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deletePaperQuestion: (id: string, qid: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}/questions/${qid}`, { method: 'DELETE' }),
   deletePaper: (id: string) =>
     request<{ ok: boolean }>(`/api/papers/${id}`, { method: 'DELETE' }),
   reprocessPaper: (id: string) =>
@@ -117,6 +129,11 @@ export const api = {
     files.forEach((f) => fd.append('files', f))
     if (usePaperFiles) fd.append('use_paper_files', 'true')
     return request<{ job_id: string }>('/api/submissions', { method: 'POST', body: fd })
+  },
+  addSubmissionFiles: (jobId: string, files: File[]) => {
+    const fd = new FormData()
+    files.forEach((f) => fd.append('files', f))
+    return request<{ ok: boolean }>(`/api/jobs/${jobId}/files`, { method: 'POST', body: fd })
   },
 
   // questions

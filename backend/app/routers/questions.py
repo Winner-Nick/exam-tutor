@@ -27,6 +27,7 @@ def override_answer(qid: str, req: OverrideRequest, job: dict = Depends(auth.get
 
     store.update_question(
         job_id, qid, student_answer=q.get("student_answer"), status=q["status"],
+        overridden=1,  # 人工修正：补拍重跑时保留，不被自动识别覆盖
     )
 
     # 改后变成错题且尚无讲解 -> 高优先级入队（SSE question_explained 通知就绪）

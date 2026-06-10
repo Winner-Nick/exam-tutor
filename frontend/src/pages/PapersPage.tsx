@@ -71,9 +71,27 @@ export function PapersPage() {
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <h3 className="font-bold">📚 录入新试卷</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-bold">📚 录入新试卷</h3>
+          <button
+            onClick={async () => {
+              const title = prompt('试卷名称（手动录入题号和答案，不上传文件）')
+              if (!title?.trim()) return
+              try {
+                const { paper_id } = await api.createManualPaper(title.trim())
+                qc.invalidateQueries({ queryKey: ['papers'] })
+                navigate(`/papers/${paper_id}`)
+              } catch (e) {
+                toast(e instanceof ApiError ? e.message : '创建失败', 'error')
+              }
+            }}
+            className="text-sm text-primary-600 hover:underline"
+          >
+            ✍️ 只有答案？手动录入
+          </button>
+        </div>
         <p className="mt-1 text-xs text-slate-400">
-          上传试卷（含或不含参考答案均可，PDF 或拍照图片，可多选）。答案在另一份文件里？先传题目，进入试卷后再补传答案。
+          上传试卷（PDF 或拍照图片，可多选）：含答案、不含答案、甚至只传答案页都可以。答案在另一份文件里？先传题目，进入试卷后再「补传答案文件」。
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button

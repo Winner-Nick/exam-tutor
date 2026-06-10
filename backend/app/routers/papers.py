@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from .. import auth, events, pipeline, security, store, workers
 from ..config import settings
-from ..models import PaperAnswerRequest, PaperUpdateRequest
+from ..models import PaperAnswerRequest, PaperQuestionCreateRequest, PaperUpdateRequest
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
@@ -46,6 +46,17 @@ async def create_paper(
         store.delete_paper(paper_id)
         raise
     workers.enqueue_paper(paper_id)
+    return {"paper_id": paper_id}
+
+
+@router.post("/manual", status_code=201)
+def create_manual_paper(req: PaperUpdateRequest, user: dict = Depends(auth.get_current_user)):
+    """不传文件、纯手动录入题号和答案的试卷（适合只有答案没有卷子的场景）。"""
+    paper_id = store.new_job_id()
+    store.create_paper(paper_id, user["id"], req.title.strip())
+    store.update_paper(paper_id, status="ready", stage="done",
+                       progress_done=1, progress_total=1, progress_label="完成",
+                       meta={"title": req.title.strip(), "total_questions": 0})
     return {"paper_id": paper_id}
 
 
@@ -112,6 +123,29 @@ def reprocess(paper: dict = Depends(auth.get_owned_paper)):
                        progress_done=0, progress_total=1, progress_label="排队中…",
                        error=None)
     workers.enqueue_paper(paper["id"])
+    return {"ok": True}
+
+
+@router.post("/{paper_id}/questions", status_code=201)
+def add_question(req: PaperQuestionCreateRequest, paper: dict = Depends(auth.get_owned_paper)):
+    """手动补一道题（识别漏题，或仅答案/纯手动建卷时录入题号+答案）。"""
+    if paper["status"] == "processing":
+        raise HTTPException(409, "试卷正在识别中")
+    number = req.number.strip()
+    if store.get_paper_question(paper["id"], "q" + number):
+        raise HTTPException(409, f"题号 {number} 已存在")
+    if len(store.get_paper_questions(paper["id"])) >= 200:
+        raise HTTPException(400, "题目数量已达上限")
+    ca = (req.correct_answer or "").strip() or None
+    return store.add_paper_question(paper["id"], number, ca, (req.type or "").strip() or None)
+
+
+@router.delete("/{paper_id}/questions/{qid}")
+def delete_question(qid: str, paper: dict = Depends(auth.get_owned_paper)):
+    if paper["status"] == "processing":
+        raise HTTPException(409, "试卷正在识别中")
+    if not store.delete_paper_question(paper["id"], qid):
+        raise HTTPException(404, "题目不存在")
     return {"ok": True}
 
 

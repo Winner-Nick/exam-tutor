@@ -78,7 +78,11 @@ def build_questions(pages: list[dict]) -> tuple[list[dict], dict]:
 
 
 def build_paper_questions(pages: list[dict]) -> list[dict]:
-    """试卷入库：合并题目与标准答案，不含学生作答。"""
+    """试卷入库：合并题目与标准答案，不含学生作答。
+
+    只传了答案（没有题目页）时，按 answer_key 的题号生成"题干为空"的存根题，
+    照样可以批改判分；题干等信息老师可后续补充或忽略。
+    """
     order, qmap, answer_key = _merge_pages(pages)
     questions: list[dict] = []
     for num in sorted(order, key=_num_key):
@@ -89,6 +93,15 @@ def build_paper_questions(pages: list[dict]) -> list[dict]:
             "options": c.get("options") or None, "passage": c.get("passage"),
             "correct_answer": answer_key.get(num), "knowledge_point": None,
         })
+    known = set(order)
+    for num, ans in answer_key.items():
+        if num not in known:
+            questions.append({
+                "id": "q" + num, "number": num, "section": None, "type": None,
+                "stem": None, "options": None, "passage": None,
+                "correct_answer": ans, "knowledge_point": None,
+            })
+    questions.sort(key=lambda q: _num_key(q["number"]))
     return questions
 
 
@@ -110,12 +123,18 @@ def _grade_all(questions: list[dict]) -> None:
             else:
                 q["status"] = "unknown"
         else:
-            # 非选择题（填空/简答）：完全一致判对；不一致不轻易判错（手写转写
-            # 有误差），标 unknown 交用户确认
-            if sa and ca and sa.strip().lower() == ca.strip().lower():
+            # 无选项信息（如仅答案建卷的存根题）：答案若是单个字母按选择题严判；
+            # 其他填空/简答完全一致判对，不一致不轻易判错（手写转写有误差）
+            sa_s, ca_s = (sa or "").strip(), (ca or "").strip()
+            if sa_s and ca_s and sa_s.lower() == ca_s.lower():
                 q["status"] = "correct"
+            elif sa_s and len(ca_s) == 1 and ca_s.isalpha():
+                q["status"] = "wrong"
             else:
                 q["status"] = "unknown"
+
+
+_TITLE_BAD = ("满分", "考试时间", "考生须知", "注意事项", "本试卷共", "答题卡", "请将", "填涂")
 
 
 def build_meta(pages: list[dict], questions: list[dict], filename: str) -> dict:
@@ -123,13 +142,16 @@ def build_meta(pages: list[dict], questions: list[dict], filename: str) -> dict:
     title = None
     for line in raw.splitlines():
         s = line.strip()
-        if len(s) >= 6 and any(w in s for w in ("试卷", "练习", "考试", "中考", "模拟", "测试")):
+        if (6 <= len(s) <= 40 and not s[0].isdigit()
+                and any(w in s for w in ("试卷", "练习", "考试", "中考", "模拟", "测试", "单元", "月考", "期中", "期末"))
+                and not any(b in s for b in _TITLE_BAD)):
             title = s
             break
     if not title:
         for line in raw.splitlines():
-            if line.strip():
-                title = line.strip()[:40]
+            s = line.strip()
+            if s and not any(b in s for b in _TITLE_BAD):
+                title = s[:40]
                 break
     return {"title": title or filename or "试卷", "total_questions": len(questions)}
 
@@ -273,19 +295,40 @@ def _render_files(owner_dir, files: list[dict], path_of) -> list[tuple[dict, int
     return plans
 
 
+def _is_blank_entry(p: dict) -> bool:
+    return bool(p.get("blank")) or "blank" in (p.get("page_role") or [])
+
+
 def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
                        mode: str, vision_call, blank_result) -> list[dict]:
-    """对一个文件的 n 页做视觉识别，按文件 sha 缓存（页码为文件内局部 1..n）。"""
-    cache = store.vision_cache_path(sha256, mode) if sha256 else None
-    if cache and cache.exists():
-        return json.loads(cache.read_text(encoding="utf-8"))
+    """对一个文件的 n 页做视觉识别，按文件 sha 缓存（页码为文件内局部 1..n）。
 
+    缓存命中时校验其中的"空白页"结论：空白判定阈值修正后，曾被误判跳过的页
+    （如内容稀疏的答案页）会被重新识别并回写缓存，其余页继续复用。
+    """
+    cache = store.vision_cache_path(sha256, mode) if sha256 else None
     by_idx: dict[int, dict] = {}
+    if cache and cache.exists():
+        cached = json.loads(cache.read_text(encoding="utf-8"))
+        stale = [
+            p["page"] for p in cached
+            if _is_blank_entry(p)
+            and (pages_dir / f"page_{start + p['page']:02d}.jpg").exists()
+            and not pdf_utils.is_blank_page(pages_dir / f"page_{start + p['page']:02d}.jpg")
+        ]
+        if not stale:
+            return cached
+        by_idx = {p["page"]: p for p in cached if p["page"] not in stale}
+
     payload = []
     for li in range(1, n + 1):
+        if li in by_idx:
+            continue
         img = pages_dir / f"page_{start + li:02d}.jpg"
         if pdf_utils.is_blank_page(img):
-            by_idx[li] = blank_result(li)
+            r = blank_result(li)
+            r["blank"] = True
+            by_idx[li] = r
         else:
             payload.append((li, pdf_utils.image_to_data_url(img)))
     for r in vision_call(payload):
@@ -470,6 +513,27 @@ def process_submission(job_id: str) -> None:
         for q in questions:
             if str(q["number"]) in low_nums and q["status"] in ("correct", "wrong"):
                 q["status"] = "unknown"
+
+        # 补拍重跑：与上次结果合并——老师人工修正过的题（overridden）原样保留；
+        # 新照片没拍到的题保留旧答案与判定；答案与判定未变的题保留已生成的讲解
+        old_qs = {q["id"]: q for q in store.get_questions(job_id)}
+        for q in questions:
+            o = old_qs.get(q["id"])
+            if not o:
+                continue
+            if o.get("overridden"):
+                q["student_answer"] = o.get("student_answer")
+                q["status"] = o["status"]
+                q["overridden"] = True
+            elif not q.get("student_answer") and o.get("student_answer"):
+                q["student_answer"] = o["student_answer"]
+                q["status"] = o["status"]
+            if (q.get("student_answer") == o.get("student_answer")
+                    and q.get("status") == o.get("status")):
+                q["explanation"] = o.get("explanation")
+                q["explain_state"] = o.get("explain_state") or "none"
+                if o.get("knowledge_point"):
+                    q["knowledge_point"] = o["knowledge_point"]
         meta = {"title": job.get("paper_title") or "试卷",
                 "total_questions": len(questions)}
 
