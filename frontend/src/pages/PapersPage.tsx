@@ -94,10 +94,10 @@ export function PapersPage() {
         <p className="mt-1 text-xs text-slate-400">
           上传试卷（PDF 或拍照图片，可多选）：含答案、不含答案、甚至只传答案页都可以。答案在另一份文件里？先传题目，进入试卷后再「补传答案文件」。
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <button
             onClick={() => inputRef.current?.click()}
-            className="rounded-xl border border-dashed border-slate-300 px-4 py-2 text-sm hover:border-primary-400 dark:border-slate-700"
+            className="shrink-0 rounded-xl border border-dashed border-slate-300 px-4 py-2 text-sm hover:border-primary-400 dark:border-slate-700"
           >
             📄 选择文件{pendingFiles.length > 0 && `（已选 ${pendingFiles.length} 个）`}
           </button>
@@ -111,7 +111,7 @@ export function PapersPage() {
           <button
             onClick={() => create.mutate()}
             disabled={pendingFiles.length === 0 || create.isPending}
-            className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+            className="shrink-0 rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
           >
             {create.isPending ? '上传中…' : '开始识别'}
           </button>

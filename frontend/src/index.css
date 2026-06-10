@@ -65,6 +65,15 @@ body {
   @apply rounded-full bg-slate-300 dark:bg-slate-600;
 }
 
+/* 隐藏滚动条（移动端导航横向滑动） */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;

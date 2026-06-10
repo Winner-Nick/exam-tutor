@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
@@ -163,8 +163,16 @@ function InviteManager() {
 export function SettingsPage() {
   const user = useOutletContext<User>()
   const toast = useToast()
+  const navigate = useNavigate()
+  const qc = useQueryClient()
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
+
+  async function logout() {
+    await api.logout()
+    qc.clear()
+    navigate('/login')
+  }
 
   const changePw = useMutation({
     mutationFn: () => api.changePassword(oldPw, newPw),
@@ -188,9 +196,17 @@ export function SettingsPage() {
   return (
     <div className="mx-auto max-w-lg space-y-4">
       <Card title="账号">
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {user.username}（{user.role === 'admin' ? '管理员' : '普通用户'}）
-        </p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="min-w-0 truncate text-sm text-slate-500 dark:text-slate-400">
+            {user.username}（{user.role === 'admin' ? '管理员' : '普通用户'}）
+          </p>
+          <button
+            onClick={logout}
+            className="shrink-0 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-slate-500 hover:border-rose-300 hover:text-rose-500 dark:border-slate-700"
+          >
+            退出登录
+          </button>
+        </div>
       </Card>
 
       <Card title="修改密码">

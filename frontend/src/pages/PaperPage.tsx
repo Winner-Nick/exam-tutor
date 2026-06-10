@@ -186,8 +186,8 @@ export function PaperPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           {editingTitle !== null ? (
             <form
               className="flex items-center gap-2"

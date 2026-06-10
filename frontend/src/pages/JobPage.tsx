@@ -213,7 +213,8 @@ export function JobPage() {
             <QuestionDetail job={job} question={selected} />
           ) : (
             <p className="py-16 text-center text-sm text-slate-400">
-              从左侧选择一道题查看详情与讲解
+              <span className="lg:hidden">在「题目」中点击题号，查看该题详情与讲解</span>
+              <span className="hidden lg:inline">从左侧选择一道题查看详情与讲解</span>
             </p>
           )}
         </section>

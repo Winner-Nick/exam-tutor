@@ -47,7 +47,7 @@ export function LoginPage() {
           <div className="text-4xl">📘</div>
           <h1 className="mt-2 text-2xl font-bold">错题家教</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            上传试卷，自动判分，AI 讲解每一道错题
+            拍照上传作答，自动判分，AI 讲解每一道错题
           </p>
         </div>
         <form
