@@ -47,6 +47,12 @@ class PaperAnswerRequest(BaseModel):
     correct_answer: str | None = Field(default=None, max_length=500)
 
 
+class FeedbackRequest(BaseModel):
+    message: str = Field(default="", max_length=2000)
+    page: str = Field(default="", max_length=200)
+    diag: dict = Field(default_factory=dict)
+
+
 class PaperQuestionCreateRequest(BaseModel):
     number: str = Field(min_length=1, max_length=10, pattern=r"^[0-9A-Za-z（）()．.\-]+$")
     correct_answer: str | None = Field(default=None, max_length=500)

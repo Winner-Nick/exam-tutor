@@ -167,7 +167,24 @@ def _v4(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE questions ADD COLUMN overridden INTEGER NOT NULL DEFAULT 0")
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4]
+def _v5(conn: sqlite3.Connection) -> None:
+    """用户反馈：自动附带客户端诊断信息（设备/内核/报错），管理员可查看。"""
+    conn.executescript(
+        """
+        CREATE TABLE feedback (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            message TEXT,
+            page TEXT,
+            diag_json TEXT,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX idx_feedback_at ON feedback(created_at DESC);
+        """
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5]
 
 
 def init_db() -> None:

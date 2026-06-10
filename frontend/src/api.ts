@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  Feedback,
   Invite,
   Job,
   JobStats,
@@ -159,6 +160,16 @@ export const api = {
     request<{ messages: ChatMessage[] }>(
       `/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`,
     ),
+
+  // 反馈
+  sendFeedback: (message: string, page: string, diag: Record<string, unknown>) =>
+    request<{ id: number }>('/api/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ message, page, diag }),
+    }),
+  listFeedback: () => request<{ feedback: Feedback[] }>('/api/admin/feedback'),
+  deleteFeedback: (id: number) =>
+    request<{ ok: boolean }>(`/api/admin/feedback/${id}`, { method: 'DELETE' }),
 
   // App 安装包发布页（公开，无需登录）
   listReleases: () => request<{ releases: Release[] }>('/api/releases'),

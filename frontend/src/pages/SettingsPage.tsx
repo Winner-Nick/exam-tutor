@@ -4,7 +4,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
-import type { Invite, User } from '../types'
+import type { Feedback, Invite, User } from '../types'
 
 const inputCls =
   'w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-primary-400 dark:border-slate-700 dark:bg-slate-800'
@@ -160,6 +160,76 @@ function InviteManager() {
   )
 }
 
+function FeedbackItem({ fb, onDelete }: { fb: Feedback; onDelete: () => void }) {
+  const [open, setOpen] = useState(false)
+  const d = fb.diag
+  const errors = d.errors ?? []
+  return (
+    <li className="py-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+        <span className="font-medium text-slate-600 dark:text-slate-300">{fb.username || '未知用户'}</span>
+        <span>{new Date(fb.created_at * 1000).toLocaleString('zh-CN')}</span>
+        {fb.page && <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono dark:bg-slate-800">{fb.page}</span>}
+        {errors.length > 0 && (
+          <span className="rounded-full bg-rose-50 px-2 py-0.5 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300">
+            {errors.length} 条报错
+          </span>
+        )}
+        <span className="flex-1" />
+        <button onClick={() => setOpen(!open)} className="text-primary-600">
+          {open ? '收起' : '设备详情'}
+        </button>
+        <button
+          onClick={() => {
+            if (confirm('删除这条反馈？')) onDelete()
+          }}
+          className="text-rose-400 hover:text-rose-600"
+        >
+          删除
+        </button>
+      </div>
+      {fb.message && <p className="mt-1.5 text-sm whitespace-pre-wrap">{fb.message}</p>}
+      {open && (
+        <pre className="thin-scroll mt-2 max-h-64 overflow-auto rounded-xl bg-slate-50 p-3 text-xs leading-relaxed whitespace-pre-wrap text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
+          {JSON.stringify(d, null, 2)}
+        </pre>
+      )}
+    </li>
+  )
+}
+
+function FeedbackManager() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const q = useQuery({ queryKey: ['admin-feedback'], queryFn: api.listFeedback })
+
+  const del = useMutation({
+    mutationFn: api.deleteFeedback,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-feedback'] }),
+    onError: (e) => toast(e instanceof ApiError ? e.message : '删除失败', 'error'),
+  })
+
+  return (
+    <Card title="用户反馈">
+      {q.isPending ? (
+        <div className="flex justify-center py-6">
+          <Spinner />
+        </div>
+      ) : q.isError ? (
+        <p className="py-4 text-center text-sm text-slate-400">加载失败</p>
+      ) : q.data.feedback.length === 0 ? (
+        <p className="py-4 text-center text-sm text-slate-400">还没有收到反馈</p>
+      ) : (
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+          {q.data.feedback.map((fb) => (
+            <FeedbackItem key={fb.id} fb={fb} onDelete={() => del.mutate(fb.id)} />
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
 export function SettingsPage() {
   const user = useOutletContext<User>()
   const toast = useToast()
@@ -237,6 +307,7 @@ export function SettingsPage() {
       </Card>
 
       {user.role === 'admin' && <InviteManager />}
+      {user.role === 'admin' && <FeedbackManager />}
     </div>
   )
 }

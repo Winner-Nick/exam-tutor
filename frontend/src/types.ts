@@ -124,6 +124,15 @@ export interface Release {
   apk_size: number | null
 }
 
+export interface Feedback {
+  id: number
+  username: string | null
+  message: string | null
+  page: string | null
+  created_at: number
+  diag: Record<string, unknown> & { errors?: { at: string; msg: string }[] }
+}
+
 export interface Invite {
   code: string
   created_by_name: string | null

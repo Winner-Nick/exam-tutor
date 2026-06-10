@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { useUi } from '../store'
 import type { User } from '../types'
+import { FeedbackDialog } from './FeedbackDialog'
 
 const navItems = [
   { to: '/', label: '批改', end: true },
@@ -14,6 +15,7 @@ const navItems = [
 
 export function AppShell({ user, children }: { user: User; children: ReactNode }) {
   const { theme, toggleTheme } = useUi()
+  const [showFeedback, setShowFeedback] = useState(false)
 
   return (
     <div className="min-h-screen">
@@ -52,6 +54,13 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
             {user.username}
           </span>
           <button
+            onClick={() => setShowFeedback(true)}
+            title="问题反馈"
+            className="shrink-0 rounded-lg p-1.5 text-lg hover:bg-slate-100 sm:p-2 dark:hover:bg-slate-800"
+          >
+            📣
+          </button>
+          <button
             onClick={toggleTheme}
             title="切换深浅主题"
             className="shrink-0 rounded-lg p-1.5 text-lg hover:bg-slate-100 sm:p-2 dark:hover:bg-slate-800"
@@ -61,6 +70,7 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+      {showFeedback && <FeedbackDialog onClose={() => setShowFeedback(false)} />}
     </div>
   )
 }
