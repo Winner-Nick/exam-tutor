@@ -95,7 +95,8 @@ def build_paper_questions(pages: list[dict]) -> list[dict]:
         })
     known = set(order)
     for num, ans in answer_key.items():
-        if num not in known:
+        # "五: 略。" 之类的占位条目不是题目，跳过
+        if num not in known and ans.strip().rstrip("。.") != "略":
             questions.append({
                 "id": "q" + num, "number": num, "section": None, "type": None,
                 "stem": None, "options": None, "passage": None,
@@ -103,6 +104,65 @@ def build_paper_questions(pages: list[dict]) -> list[dict]:
             })
     questions.sort(key=lambda q: _num_key(q["number"]))
     return questions
+
+
+def _global_numbering_ok(pages: list[dict]) -> bool:
+    """题号已全局唯一且为纯数字时，无需归一化。"""
+    seen: set[str] = set()
+    for p in pages:
+        for q in p.get("questions") or []:
+            num = str(q.get("number") or "").strip()
+            if not num:
+                continue
+            if num in seen or not num.isdigit():
+                return False
+            seen.add(num)
+    return True
+
+
+def _renumber_pages(pages: list[dict]) -> None:
+    """节内编号 -> 全卷统一题号（原地改写 question["number"]）。
+
+    很多试卷每个大题从 1 重新计数，而答案页用全卷题号；裸题号跨页合并会让
+    不同大题的同号题互相覆盖。交给 DeepSeek 对照答案推断全局题号——输入是
+    紧凑结构、输出只有几十对映射，成本可忽略。
+    """
+    compact: list[dict] = []
+    for p in pages:
+        for q in p.get("questions") or []:
+            num = str(q.get("number") or "").strip()
+            if not num:
+                continue
+            compact.append({
+                "page": p.get("page"), "number": num,
+                "section": q.get("section"), "type": q.get("type"),
+                "stem": (q.get("stem") or "")[:80],
+            })
+    if not compact:
+        return
+    answer_key: dict[str, str] = {}
+    for p in pages:
+        for k, v in (p.get("answer_key") or {}).items():
+            answer_key[str(k).strip()] = str(v)[:40]
+    # 推理模型的思维链也消耗 max_tokens，给足额度防止正文被截断
+    data = llm.deepseek_json(
+        prompts.RENUMBER_SYSTEM, prompts.renumber_user(compact, answer_key),
+        max_tokens=16000,
+    )
+    mapping: dict[tuple, str] = {}
+    for m in data.get("mapping") or []:
+        g = m.get("global")
+        if g is None or str(g).strip() == "":
+            continue
+        mapping[(m.get("page"), str(m.get("number")).strip())] = str(g).strip()
+    if not mapping:
+        return
+    for p in pages:
+        for q in p.get("questions") or []:
+            num = str(q.get("number") or "").strip()
+            g = mapping.get((p.get("page"), num))
+            if g:
+                q["number"] = g
 
 
 def _grade_all(questions: list[dict]) -> None:
@@ -134,23 +194,32 @@ def _grade_all(questions: list[dict]) -> None:
                 q["status"] = "unknown"
 
 
-_TITLE_BAD = ("满分", "考试时间", "考生须知", "注意事项", "本试卷共", "答题卡", "请将", "填涂")
+_TITLE_BAD = ("满分", "考试时间", "考生须知", "注意事项", "本试卷共", "答题卡", "请将", "填涂",
+              "参考答案", "评分标准")
+_PAGE_FOOTER = re.compile(r"第\s*\d+\s*页")
 
 
 def build_meta(pages: list[dict], questions: list[dict], filename: str) -> dict:
-    raw = (pages[0].get("raw_text") if pages else "") or ""
+    # 标题取自封面/题目页：照片乱序时第一页可能是答案页，其页脚"英语试卷 第X页"会被误当标题
+    src = next(
+        (p for p in pages
+         if "cover" in (p.get("page_role") or []) or p.get("questions")),
+        pages[0] if pages else None,
+    )
+    raw = ((src or {}).get("raw_text")) or ""
     title = None
     for line in raw.splitlines():
         s = line.strip()
         if (6 <= len(s) <= 40 and not s[0].isdigit()
                 and any(w in s for w in ("试卷", "练习", "考试", "中考", "模拟", "测试", "单元", "月考", "期中", "期末"))
-                and not any(b in s for b in _TITLE_BAD)):
+                and not any(b in s for b in _TITLE_BAD)
+                and not _PAGE_FOOTER.search(s)):
             title = s
             break
     if not title:
         for line in raw.splitlines():
             s = line.strip()
-            if s and not any(b in s for b in _TITLE_BAD):
+            if s and not any(b in s for b in _TITLE_BAD) and not _PAGE_FOOTER.search(s):
                 title = s[:40]
                 break
     return {"title": title or filename or "试卷", "total_questions": len(questions)}
@@ -390,6 +459,13 @@ def process_paper(paper_id: str) -> None:
             json.dumps(all_pages, ensure_ascii=False, indent=2), encoding="utf-8")
 
         _set_paper_progress(paper_id, "consolidate", 0, 1, "正在汇总题目与标准答案…")
+        if not _global_numbering_ok(all_pages):
+            _set_paper_progress(paper_id, "consolidate", 0, 1, "正在对照答案归一化题号…")
+            try:
+                _renumber_pages(all_pages)
+            except Exception:  # noqa: BLE001
+                # 归一化失败退回原始题号：宁可部分题缺答案，也不张冠李戴
+                pass
         questions = build_paper_questions(all_pages)
 
         # 补传答案/重新识别时，保留老师手工核对过的答案与已有考点
