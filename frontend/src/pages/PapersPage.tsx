@@ -41,6 +41,7 @@ export function PapersPage() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [picking, setPicking] = useState<string | null>(null)
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [title, setTitle] = useState('')
 
   const papers = useQuery({
@@ -51,7 +52,8 @@ export function PapersPage() {
   })
 
   const create = useMutation({
-    mutationFn: () => api.createPaper(pendingFiles, title.trim() || null),
+    mutationFn: () => api.createPaper(pendingFiles, title.trim() || null, setUploadPct),
+    onSettled: () => setUploadPct(null),
     onSuccess: ({ paper_id }) => {
       setPendingFiles([])
       setTitle('')
@@ -115,7 +117,11 @@ export function PapersPage() {
             disabled={pendingFiles.length === 0 || create.isPending}
             className="shrink-0 rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
           >
-            {create.isPending ? '上传中…' : '开始识别'}
+            {create.isPending
+              ? uploadPct != null && uploadPct < 100
+                ? `⬆️ 上传中 ${uploadPct}%`
+                : '⏳ 处理中…'
+              : '开始识别'}
           </button>
         </div>
         {pendingFiles.length > 0 && (

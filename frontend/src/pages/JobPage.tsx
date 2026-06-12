@@ -38,11 +38,13 @@ export function JobPage() {
   const { selectedQid, setSelectedQid, mobileTab, setMobileTab, setFilter } = useUi()
   const [showPaper, setShowPaper] = useState(false)
   const [picking, setPicking] = useState(false)
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
   const moreFilesRef = useRef<HTMLInputElement>(null)
   const { sseDown } = useJobEvents(jobId)
 
   const addFiles = useMutation({
-    mutationFn: (files: File[]) => api.addSubmissionFiles(jobId!, files),
+    mutationFn: (files: File[]) => api.addSubmissionFiles(jobId!, files, setUploadPct),
+    onSettled: () => setUploadPct(null),
     onSuccess: () => {
       toast('已上传，正在重新识别判分')
       qc.invalidateQueries({ queryKey: ['job', jobId] })
@@ -107,7 +109,13 @@ export function JobPage() {
         <div className="mt-4 flex justify-center gap-3 text-sm">
           {job.kind === 'submission' && (
             <label className="cursor-pointer rounded-xl bg-primary-600 px-4 py-2 font-medium text-white hover:bg-primary-700">
-              {addFiles.isPending ? '上传中…' : picking ? '⏳ 正在处理照片…' : '📷 重新拍照上传'}
+              {addFiles.isPending
+                ? uploadPct != null && uploadPct < 100
+                  ? `⬆️ 上传 ${uploadPct}%`
+                  : '上传中…'
+                : picking
+                  ? '⏳ 正在处理照片…'
+                  : '📷 重新拍照上传'}
               <input
                 type="file"
                 multiple
@@ -172,7 +180,13 @@ export function JobPage() {
               title="还有没拍的页面？继续拍照补传，已识别的部分不会丢"
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
             >
-              {addFiles.isPending ? '上传中…' : picking ? '⏳ 正在处理照片…' : '📷 补拍补传'}
+              {addFiles.isPending
+                ? uploadPct != null && uploadPct < 100
+                  ? `⬆️ 上传 ${uploadPct}%`
+                  : '上传中…'
+                : picking
+                  ? '⏳ 正在处理照片…'
+                  : '📷 补拍补传'}
             </button>
           )}
           <button

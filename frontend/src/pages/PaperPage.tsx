@@ -98,6 +98,7 @@ export function PaperPage() {
   const answersRef = useRef<HTMLInputElement>(null)
   const [showPages, setShowPages] = useState(false)
   const [picking, setPicking] = useState(false)
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [editingTitle, setEditingTitle] = useState<string | null>(null)
 
   const paperQ = useQuery({
@@ -108,7 +109,8 @@ export function PaperPage() {
   })
 
   const addAnswers = useMutation({
-    mutationFn: (files: File[]) => api.addPaperFiles(paperId!, files, 'answers'),
+    mutationFn: (files: File[]) => api.addPaperFiles(paperId!, files, 'answers', setUploadPct),
+    onSettled: () => setUploadPct(null),
     onSuccess: () => {
       toast('答案文件已上传，正在重新汇总')
       qc.invalidateQueries({ queryKey: ['paper', paperId] })
@@ -242,7 +244,13 @@ export function PaperPage() {
             disabled={addAnswers.isPending || picking}
             className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
           >
-            {addAnswers.isPending ? '上传中…' : picking ? '⏳ 正在处理照片…' : '📎 补传答案文件'}
+            {addAnswers.isPending
+              ? uploadPct != null && uploadPct < 100
+                ? `⬆️ 上传 ${uploadPct}%`
+                : '上传中…'
+              : picking
+                ? '⏳ 正在处理照片…'
+                : '📎 补传答案文件'}
           </button>
           <button
             onClick={() => navigate(`/?paper=${paper.id}`)}

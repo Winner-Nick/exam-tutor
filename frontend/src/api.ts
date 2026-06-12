@@ -39,6 +39,39 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** 大文件上传走 XHR：fetch 拿不到上传进度，而手机网络传十几张照片
+ * 可能要几分钟，没有进度反馈用户会以为卡死。 */
+function upload<T>(path: string, fd: FormData, onProgress?: (pct: number) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', path)
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as T)
+        } catch {
+          reject(new ApiError(xhr.status, '响应解析失败'))
+        }
+      } else {
+        let detail = `请求失败 (${xhr.status})`
+        try {
+          const d = JSON.parse(xhr.responseText)
+          if (typeof d.detail === 'string') detail = d.detail
+        } catch {
+          /* 保留默认错误信息 */
+        }
+        reject(new ApiError(xhr.status, detail))
+      }
+    }
+    xhr.onerror = () => reject(new ApiError(0, '网络错误，请检查网络后重试'))
+    xhr.ontimeout = () => reject(new ApiError(0, '上传超时，请重试'))
+    xhr.send(fd)
+  })
+}
+
 export const api = {
   // auth
   me: () => request<User>('/api/auth/me'),
@@ -78,17 +111,22 @@ export const api = {
   // papers（试卷库）
   listPapers: () => request<{ papers: Paper[] }>('/api/papers'),
   getPaper: (id: string) => request<Paper>(`/api/papers/${id}`),
-  createPaper: (files: File[], title: string | null) => {
+  createPaper: (files: File[], title: string | null, onProgress?: (pct: number) => void) => {
     const fd = new FormData()
     files.forEach((f) => fd.append('files', f))
     if (title) fd.append('title', title)
-    return request<{ paper_id: string }>('/api/papers', { method: 'POST', body: fd })
+    return upload<{ paper_id: string }>('/api/papers', fd, onProgress)
   },
-  addPaperFiles: (id: string, files: File[], kind: 'answers' | 'questions' | 'mixed') => {
+  addPaperFiles: (
+    id: string,
+    files: File[],
+    kind: 'answers' | 'questions' | 'mixed',
+    onProgress?: (pct: number) => void,
+  ) => {
     const fd = new FormData()
     files.forEach((f) => fd.append('files', f))
     fd.append('kind', kind)
-    return request<{ ok: boolean }>(`/api/papers/${id}/files`, { method: 'POST', body: fd })
+    return upload<{ ok: boolean }>(`/api/papers/${id}/files`, fd, onProgress)
   },
   renamePaper: (id: string, title: string) =>
     request<Paper>(`/api/papers/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
@@ -124,18 +162,24 @@ export const api = {
   },
   getJob: (id: string) => request<Job>(`/api/jobs/${id}`),
   deleteJob: (id: string) => request<{ ok: boolean }>(`/api/jobs/${id}`, { method: 'DELETE' }),
-  createSubmission: (paperId: string, studentId: number, files: File[], usePaperFiles = false) => {
+  createSubmission: (
+    paperId: string,
+    studentId: number,
+    files: File[],
+    usePaperFiles = false,
+    onProgress?: (pct: number) => void,
+  ) => {
     const fd = new FormData()
     fd.append('paper_id', paperId)
     fd.append('student_id', String(studentId))
     files.forEach((f) => fd.append('files', f))
     if (usePaperFiles) fd.append('use_paper_files', 'true')
-    return request<{ job_id: string }>('/api/submissions', { method: 'POST', body: fd })
+    return upload<{ job_id: string }>('/api/submissions', fd, onProgress)
   },
-  addSubmissionFiles: (jobId: string, files: File[]) => {
+  addSubmissionFiles: (jobId: string, files: File[], onProgress?: (pct: number) => void) => {
     const fd = new FormData()
     files.forEach((f) => fd.append('files', f))
-    return request<{ ok: boolean }>(`/api/jobs/${jobId}/files`, { method: 'POST', body: fd })
+    return upload<{ ok: boolean }>(`/api/jobs/${jobId}/files`, fd, onProgress)
   },
 
   // questions

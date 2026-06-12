@@ -107,6 +107,7 @@ export function DashboardPage() {
   const [paperId, setPaperId] = useState<string>('')
   const [files, setFiles] = useState<File[]>([])
   const [picking, setPicking] = useState<string | null>(null)
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [usePaperFiles, setUsePaperFiles] = useState(false)
 
   const students = useQuery({ queryKey: ['students'], queryFn: api.listStudents })
@@ -132,7 +133,8 @@ export function DashboardPage() {
   }, [papers.data, params])
 
   const submit = useMutation({
-    mutationFn: () => api.createSubmission(paperId, studentId!, files, usePaperFiles),
+    mutationFn: () => api.createSubmission(paperId, studentId!, files, usePaperFiles, setUploadPct),
+    onSettled: () => setUploadPct(null),
     onSuccess: ({ job_id }) => {
       setFiles([])
       setUsePaperFiles(false)
@@ -319,7 +321,11 @@ export function DashboardPage() {
           disabled={!canSubmit || submit.isPending}
           className="w-full rounded-xl bg-primary-600 py-2.5 font-medium text-white hover:bg-primary-700 disabled:opacity-50 sm:w-auto sm:px-8"
         >
-          {submit.isPending ? '上传中…' : '🚀 开始批改'}
+          {submit.isPending
+            ? uploadPct != null && uploadPct < 100
+              ? `⬆️ 上传中 ${uploadPct}%`
+              : '⏳ 处理中…'
+            : '🚀 开始批改'}
         </button>
       </div>
 
