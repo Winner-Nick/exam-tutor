@@ -10,7 +10,7 @@ from ..models import PaperAnswerRequest, PaperQuestionCreateRequest, PaperUpdate
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
-MAX_FILES_PER_REQUEST = 5
+MAX_FILES_PER_REQUEST = 30  # 逐页拍照的试卷轻松超过 5 张；页数总闸由 MAX_PAGES 把守
 _FILE_KINDS = {"mixed", "questions", "answers"}
 
 

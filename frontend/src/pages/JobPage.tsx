@@ -37,6 +37,7 @@ export function JobPage() {
   const toast = useToast()
   const { selectedQid, setSelectedQid, mobileTab, setMobileTab, setFilter } = useUi()
   const [showPaper, setShowPaper] = useState(false)
+  const [picking, setPicking] = useState(false)
   const moreFilesRef = useRef<HTMLInputElement>(null)
   const { sseDown } = useJobEvents(jobId)
 
@@ -106,16 +107,22 @@ export function JobPage() {
         <div className="mt-4 flex justify-center gap-3 text-sm">
           {job.kind === 'submission' && (
             <label className="cursor-pointer rounded-xl bg-primary-600 px-4 py-2 font-medium text-white hover:bg-primary-700">
-              {addFiles.isPending ? '上传中…' : '📷 重新拍照上传'}
+              {addFiles.isPending ? '上传中…' : picking ? '⏳ 正在处理照片…' : '📷 重新拍照上传'}
               <input
                 type="file"
                 multiple
                 accept=".pdf,application/pdf,image/*"
                 className="hidden"
                 onChange={async (e) => {
-                  const fs = await compressPicked(e.target.files)
-                  e.target.value = ''
-                  if (fs.length) addFiles.mutate(fs)
+                  setPicking(true)
+                  try {
+                    const { files: fs, dropped } = await compressPicked(e.target.files, 12)
+                    e.target.value = ''
+                    if (dropped > 0) toast(`一次最多上传 12 张，已忽略 ${dropped} 张`, 'error')
+                    if (fs.length) addFiles.mutate(fs)
+                  } finally {
+                    setPicking(false)
+                  }
                 }}
               />
             </label>
@@ -161,11 +168,11 @@ export function JobPage() {
           {job.kind === 'submission' && (
             <button
               onClick={() => moreFilesRef.current?.click()}
-              disabled={addFiles.isPending}
+              disabled={addFiles.isPending || picking}
               title="还有没拍的页面？继续拍照补传，已识别的部分不会丢"
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
             >
-              {addFiles.isPending ? '上传中…' : '📷 补拍补传'}
+              {addFiles.isPending ? '上传中…' : picking ? '⏳ 正在处理照片…' : '📷 补拍补传'}
             </button>
           )}
           <button
@@ -184,9 +191,15 @@ export function JobPage() {
         accept=".pdf,application/pdf,image/*"
         className="hidden"
         onChange={async (e) => {
-          const fs = await compressPicked(e.target.files)
-          e.target.value = ''
-          if (fs.length) addFiles.mutate(fs)
+          setPicking(true)
+          try {
+            const { files: fs, dropped } = await compressPicked(e.target.files, 12)
+            e.target.value = ''
+            if (dropped > 0) toast(`一次最多上传 12 张，已忽略 ${dropped} 张`, 'error')
+            if (fs.length) addFiles.mutate(fs)
+          } finally {
+            setPicking(false)
+          }
         }}
       />
 

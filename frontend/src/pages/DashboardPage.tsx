@@ -83,7 +83,7 @@ function JobCard({ job, onDelete }: { job: Job; onDelete: () => void }) {
               onDelete()
             }}
             title="删除"
-            className="absolute top-3 right-3 hidden rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-500 group-hover:block dark:hover:bg-rose-900/30"
+            className="absolute top-2.5 right-2.5 rounded-lg p-2 text-slate-300 hover:bg-rose-50 hover:text-rose-500 active:bg-rose-50 active:text-rose-500 dark:hover:bg-rose-900/30 dark:active:bg-rose-900/30"
           >
             🗑
           </button>
@@ -106,6 +106,7 @@ export function DashboardPage() {
   const [studentId, setStudentId] = useState<number | null>(null)
   const [paperId, setPaperId] = useState<string>('')
   const [files, setFiles] = useState<File[]>([])
+  const [picking, setPicking] = useState<string | null>(null)
   const [usePaperFiles, setUsePaperFiles] = useState(false)
 
   const students = useQuery({ queryKey: ['students'], queryFn: api.listStudents })
@@ -154,8 +155,17 @@ export function DashboardPage() {
   const canSubmit = !!paperId && studentId != null && (usePaperFiles || files.length > 0)
 
   async function addFiles(list: FileList | null) {
-    const fs = await compressPicked(list)
-    if (fs.length) setFiles((old) => [...old, ...fs].slice(0, 12))
+    setPicking('⏳ 正在处理…')
+    try {
+      const { files: fs, dropped } = await compressPicked(
+        list, 12, files.length,
+        (done, total) => setPicking(`⏳ 处理照片 ${done}/${total}…`),
+      )
+      if (dropped > 0) toast(`一次最多上传 12 张，已忽略 ${dropped} 张`, 'error')
+      if (fs.length) setFiles((old) => [...old, ...fs])
+    } finally {
+      setPicking(null)
+    }
   }
 
   return (
@@ -237,23 +247,23 @@ export function DashboardPage() {
           <p className="mb-2 flex items-center gap-2 text-sm font-medium">
             <span className={stepBadge}>3</span> 上传做题结果
             <span className="text-xs font-normal text-slate-400">
-              可以先拍一部分，之后在批改结果页随时「补拍补传」
+              一次最多 12 张；可以先拍一部分，之后在批改结果页随时「补拍补传」
             </span>
           </p>
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => cameraRef.current?.click()}
-              disabled={usePaperFiles}
+              disabled={usePaperFiles || !!picking}
               className="rounded-xl border border-dashed border-slate-300 px-4 py-2 text-sm hover:border-primary-400 disabled:opacity-40 dark:border-slate-700"
             >
               📷 拍照
             </button>
             <button
               onClick={() => fileRef.current?.click()}
-              disabled={usePaperFiles}
+              disabled={usePaperFiles || !!picking}
               className="rounded-xl border border-dashed border-slate-300 px-4 py-2 text-sm hover:border-primary-400 disabled:opacity-40 dark:border-slate-700"
             >
-              🖼 相册 / 文件
+              {picking ?? '🖼 相册 / 文件'}
             </button>
             <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
               <input

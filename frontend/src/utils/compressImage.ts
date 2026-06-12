@@ -23,7 +23,20 @@ export async function compressImage(file: File, maxDim = 1600, quality = 0.85): 
   }
 }
 
-/** 文件选择回调通用处理：图片逐张压缩，PDF 原样保留。 */
-export async function compressPicked(list: FileList | null): Promise<File[]> {
-  return Promise.all(Array.from(list ?? []).map((f) => compressImage(f)))
+/** 文件选择回调通用处理：图片逐张串行压缩（并行解码多张大图在手机上易卡死），
+ * PDF 原样保留。超出 limit 的部分计入 dropped，由调用方提示用户，不静默丢弃。 */
+export async function compressPicked(
+  list: FileList | null,
+  limit = Infinity,
+  existing = 0,
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ files: File[]; dropped: number }> {
+  const all = Array.from(list ?? [])
+  const keep = all.slice(0, Math.max(0, limit - existing))
+  const files: File[] = []
+  for (let i = 0; i < keep.length; i++) {
+    onProgress?.(i + 1, keep.length)
+    files.push(await compressImage(keep[i]))
+  }
+  return { files, dropped: all.length - keep.length }
 }

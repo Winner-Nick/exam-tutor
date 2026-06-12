@@ -97,6 +97,7 @@ export function PaperPage() {
   const navigate = useNavigate()
   const answersRef = useRef<HTMLInputElement>(null)
   const [showPages, setShowPages] = useState(false)
+  const [picking, setPicking] = useState(false)
   const [editingTitle, setEditingTitle] = useState<string | null>(null)
 
   const paperQ = useQuery({
@@ -238,10 +239,10 @@ export function PaperPage() {
           )}
           <button
             onClick={() => answersRef.current?.click()}
-            disabled={addAnswers.isPending}
+            disabled={addAnswers.isPending || picking}
             className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
           >
-            {addAnswers.isPending ? '上传中…' : '📎 补传答案文件'}
+            {addAnswers.isPending ? '上传中…' : picking ? '⏳ 正在处理照片…' : '📎 补传答案文件'}
           </button>
           <button
             onClick={() => navigate(`/?paper=${paper.id}`)}
@@ -259,9 +260,15 @@ export function PaperPage() {
         accept=".pdf,application/pdf,image/*"
         className="hidden"
         onChange={async (e) => {
-          const fs = await compressPicked(e.target.files)
-          e.target.value = ''
-          if (fs.length) addAnswers.mutate(fs.slice(0, 5))
+          setPicking(true)
+          try {
+            const { files: fs, dropped } = await compressPicked(e.target.files, 30)
+            e.target.value = ''
+            if (dropped > 0) toast(`一次最多上传 30 个文件，已忽略 ${dropped} 个`, 'error')
+            if (fs.length) addAnswers.mutate(fs)
+          } finally {
+            setPicking(false)
+          }
         }}
       />
 

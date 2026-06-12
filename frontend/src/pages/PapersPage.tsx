@@ -40,6 +40,7 @@ export function PapersPage() {
   const navigate = useNavigate()
   const inputRef = useRef<HTMLInputElement>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [picking, setPicking] = useState<string | null>(null)
   const [title, setTitle] = useState('')
 
   const papers = useQuery({
@@ -92,14 +93,15 @@ export function PapersPage() {
           </button>
         </div>
         <p className="mt-1 text-xs text-slate-400">
-          上传试卷（PDF 或拍照图片，可多选）：含答案、不含答案、甚至只传答案页都可以。答案在另一份文件里？先传题目，进入试卷后再「补传答案文件」。
+          上传试卷（PDF 或拍照图片，可多选，一次最多 30 个）：含答案、不含答案、甚至只传答案页都可以。答案在另一份文件里？先传题目，进入试卷后再「补传答案文件」。
         </p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <button
             onClick={() => inputRef.current?.click()}
-            className="shrink-0 rounded-xl border border-dashed border-slate-300 px-4 py-2 text-sm hover:border-primary-400 dark:border-slate-700"
+            disabled={!!picking}
+            className="shrink-0 rounded-xl border border-dashed border-slate-300 px-4 py-2 text-sm hover:border-primary-400 disabled:opacity-50 dark:border-slate-700"
           >
-            📄 选择文件{pendingFiles.length > 0 && `（已选 ${pendingFiles.length} 个）`}
+            {picking ?? <>📄 选择文件{pendingFiles.length > 0 && `（已选 ${pendingFiles.length} 个）`}</>}
           </button>
           <input
             value={title}
@@ -138,9 +140,18 @@ export function PapersPage() {
           accept=".pdf,application/pdf,image/*"
           className="hidden"
           onChange={async (e) => {
-            const fs = await compressPicked(e.target.files)
-            e.target.value = ''
-            if (fs.length) setPendingFiles((old) => [...old, ...fs].slice(0, 5))
+            setPicking('⏳ 正在处理…')
+            try {
+              const { files: fs, dropped } = await compressPicked(
+                e.target.files, 30, pendingFiles.length,
+                (done, total) => setPicking(`⏳ 处理照片 ${done}/${total}…`),
+              )
+              e.target.value = ''
+              if (dropped > 0) toast(`一次最多上传 30 个文件，已忽略 ${dropped} 个`, 'error')
+              if (fs.length) setPendingFiles((old) => [...old, ...fs])
+            } finally {
+              setPicking(null)
+            }
           }}
         />
       </div>
@@ -185,7 +196,7 @@ export function PapersPage() {
                       if (confirm('确定删除这份试卷吗？')) del.mutate(p.id)
                     }}
                     title="删除"
-                    className="absolute top-3 right-3 hidden rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-500 group-hover:block dark:hover:bg-rose-900/30"
+                    className="absolute top-2.5 right-2.5 rounded-lg p-2 text-slate-300 hover:bg-rose-50 hover:text-rose-500 active:bg-rose-50 active:text-rose-500 dark:hover:bg-rose-900/30 dark:active:bg-rose-900/30"
                   >
                     🗑
                   </button>
