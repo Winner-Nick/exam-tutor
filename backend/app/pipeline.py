@@ -455,8 +455,6 @@ def process_paper(paper_id: str) -> None:
                 all_pages.append(gp)
 
         all_pages.sort(key=lambda p: p["page"])
-        (pd / "pages_raw.json").write_text(
-            json.dumps(all_pages, ensure_ascii=False, indent=2), encoding="utf-8")
 
         _set_paper_progress(paper_id, "consolidate", 0, 1, "正在汇总题目与标准答案…")
         if not _global_numbering_ok(all_pages):
@@ -466,6 +464,9 @@ def process_paper(paper_id: str) -> None:
             except Exception:  # noqa: BLE001
                 # 归一化失败退回原始题号：宁可部分题缺答案，也不张冠李戴
                 pass
+        # 归一化之后落盘：提交"学生答在试卷上"的零成本路径靠这份数据按全卷题号取手写答案
+        (pd / "pages_raw.json").write_text(
+            json.dumps(all_pages, ensure_ascii=False, indent=2), encoding="utf-8")
         questions = build_paper_questions(all_pages)
 
         # 补传答案/重新识别时，保留老师手工核对过的答案与已有考点
@@ -550,10 +551,28 @@ def process_submission(job_id: str) -> None:
         def blank(li: int) -> dict:
             return {"page": li, "answers": []}
 
+        # 试卷自己的 pages_raw.json 是题号归一化后的版本；共享 sha 缓存是原始
+        # 节内编号（跨试卷复用，不能按某张卷改写），优先用前者取手写答案
+        paper_files_by_sha = {
+            pf.get("sha256"): pf for pf in store.list_paper_files(job["paper_id"])
+            if pf.get("sha256")
+        }
+        paper_raw_path = store.paper_dir(job["paper_id"]) / "pages_raw.json"
+        paper_raw = (json.loads(paper_raw_path.read_text(encoding="utf-8"))
+                     if paper_raw_path.exists() else None)
+
         for f, start, n in plans:
             sha = f.get("sha256")
             full_cache = store.vision_cache_path(sha, "full") if sha else None
-            if full_cache and full_cache.exists():
+            pf = paper_files_by_sha.get(sha)
+            if pf and paper_raw is not None:
+                ps, pc = pf.get("page_start") or 1, pf.get("page_count") or 0
+                for p in paper_raw:
+                    if ps <= (p.get("page") or 0) < ps + pc:
+                        for q in p.get("questions") or []:
+                            put(q.get("number"), q.get("student_marked"),
+                                q.get("student_marked_confidence"))
+            elif full_cache and full_cache.exists():
                 # 同一文件做过试卷全量识别（学生答在试卷上的场景）：直接取
                 # 其中的 student_marked，零 Gemini 成本
                 for p in json.loads(full_cache.read_text(encoding="utf-8")):
