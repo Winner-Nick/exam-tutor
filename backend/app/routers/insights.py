@@ -13,12 +13,16 @@ router = APIRouter(prefix="/api", tags=["insights"])
 
 @router.get("/mistakes")
 def mistakes(student_id: int | None = None, user: dict = Depends(auth.get_current_user)):
+    # 学生账号：强制锁定为所属老师 + 自己的档案，参数不可越界
+    owner_id = user["id"]
+    if user["role"] == "student":
+        owner_id, student_id = user["teacher_id"], user["student_id"]
     sql = """SELECT q.*, j.id AS jid, COALESCE(j.title, j.filename, '试卷') AS job_title,
                     s.name AS student_name
              FROM questions q JOIN jobs j ON j.id = q.job_id
              LEFT JOIN students s ON s.id = j.student_id
              WHERE j.user_id = ? AND q.status = 'wrong'"""
-    params: list = [user["id"]]
+    params: list = [owner_id]
     if student_id is not None:
         sql += " AND j.student_id = ?"
         params.append(student_id)
@@ -54,6 +58,9 @@ def mistakes(student_id: int | None = None, user: dict = Depends(auth.get_curren
 @router.get("/stats/overview")
 def overview(student_id: int | None = None, user: dict = Depends(auth.get_current_user)):
     conn = get_conn()
+    owner_id = user["id"]
+    if user["role"] == "student":
+        owner_id, student_id = user["teacher_id"], user["student_id"]
     jobs_sql = """SELECT j.id, j.title, j.filename, j.created_at, j.stats_json,
                          s.name AS student_name
                   FROM jobs j LEFT JOIN students s ON s.id = j.student_id
@@ -63,7 +70,7 @@ def overview(student_id: int | None = None, user: dict = Depends(auth.get_curren
                        COUNT(*) AS total
                 FROM questions q JOIN jobs j ON j.id = q.job_id
                 WHERE j.user_id = ? AND q.knowledge_point IS NOT NULL"""
-    params: list = [user["id"]]
+    params: list = [owner_id]
     if student_id is not None:
         jobs_sql += " AND j.student_id = ?"
         kp_sql += " AND j.student_id = ?"

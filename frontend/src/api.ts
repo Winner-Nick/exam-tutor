@@ -107,6 +107,18 @@ export const api = {
     request<Student>(`/api/students/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   deleteStudent: (id: number) =>
     request<{ ok: boolean }>(`/api/students/${id}`, { method: 'DELETE' }),
+  createStudentAccount: (id: number, username: string, password: string) =>
+    request<{ id: number; username: string }>(`/api/students/${id}/account`, {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  resetStudentAccountPassword: (id: number, password: string) =>
+    request<{ ok: boolean }>(`/api/students/${id}/account/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  deleteStudentAccount: (id: number) =>
+    request<{ ok: boolean }>(`/api/students/${id}/account`, { method: 'DELETE' }),
 
   // papers（试卷库）
   listPapers: () => request<{ papers: Paper[] }>('/api/papers'),

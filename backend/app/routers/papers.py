@@ -34,7 +34,7 @@ async def create_paper(
     files: list[UploadFile] = File(...),
     title: str | None = Form(default=None),
     kind: str = Form(default="mixed"),
-    user: dict = Depends(auth.get_current_user),
+    user: dict = Depends(auth.require_teacher),
 ):
     security.hit(f"paper:{user['id']}", 10, 3600, "上传过于频繁，请 1 小时后再试")
     if store.count_processing_papers(user["id"]) >= settings.max_processing_per_user:
@@ -56,7 +56,7 @@ async def create_paper(
 
 
 @router.post("/manual", status_code=201)
-def create_manual_paper(req: PaperUpdateRequest, user: dict = Depends(auth.get_current_user)):
+def create_manual_paper(req: PaperUpdateRequest, user: dict = Depends(auth.require_teacher)):
     """不传文件、纯手动录入题号和答案的试卷（适合只有答案没有卷子的场景）。"""
     paper_id = store.new_job_id()
     store.create_paper(paper_id, user["id"], req.title.strip())
@@ -95,6 +95,15 @@ async def add_files(
 
 @router.get("")
 def list_papers(user: dict = Depends(auth.get_current_user)):
+    # 学生账号：只见所属老师已就绪的试卷（仅选题所需的最小字段，不含答案）
+    if user["role"] == "student":
+        papers = [
+            {"id": p["id"], "title": p["title"], "status": p["status"],
+             "question_count": p["question_count"], "answered_count": p["answered_count"]}
+            for p in store.list_papers(user["teacher_id"])
+            if p["status"] == "ready"
+        ]
+        return {"papers": papers}
     return {"papers": store.list_papers(user["id"])}
 
 

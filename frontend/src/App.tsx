@@ -40,6 +40,13 @@ function Protected() {
   )
 }
 
+/** 仅老师/管理员可访问的页面（学生账号重定向到首页）。 */
+function TeacherOnly() {
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
+  if (me.data?.role === 'student') return <Navigate to="/" replace />
+  return <Outlet />
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -51,9 +58,11 @@ export default function App() {
             <Route element={<Protected />}>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/jobs/:jobId" element={<JobPage />} />
-              <Route path="/papers" element={<PapersPage />} />
-              <Route path="/papers/:paperId" element={<PaperPage />} />
-              <Route path="/students" element={<StudentsPage />} />
+              <Route element={<TeacherOnly />}>
+                <Route path="/papers" element={<PapersPage />} />
+                <Route path="/papers/:paperId" element={<PaperPage />} />
+                <Route path="/students" element={<StudentsPage />} />
+              </Route>
               <Route path="/mistakes" element={<MistakesPage />} />
               <Route path="/stats" element={<StatsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

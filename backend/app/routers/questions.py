@@ -10,7 +10,8 @@ router = APIRouter(prefix="/api/jobs/{job_id}/questions", tags=["questions"])
 
 
 @router.post("/{qid}/override")
-def override_answer(qid: str, req: OverrideRequest, job: dict = Depends(auth.get_owned_job)):
+def override_answer(qid: str, req: OverrideRequest, job: dict = Depends(auth.get_owned_job),
+                    user: dict = Depends(auth.require_teacher)):
     job_id = job["id"]
     q = store.get_question(job_id, qid)
     if not q:

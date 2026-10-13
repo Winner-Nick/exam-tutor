@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useOutletContext, useParams } from 'react-router-dom'
 import { api, ApiError, pageImageUrl } from '../api'
 import { ChatPanel } from '../components/ChatPanel'
 import { DonutChart } from '../components/DonutChart'
@@ -14,7 +14,7 @@ import { useToast } from '../components/Toast'
 import { useJobEvents } from '../hooks/useJobEvents'
 import { useUi } from '../store'
 import { compressPicked } from '../utils/compressImage'
-import type { Job } from '../types'
+import type { Job, User } from '../types'
 
 function StatsBar({ job }: { job: Job }) {
   const s = job.stats
@@ -44,6 +44,8 @@ export function JobPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const qc = useQueryClient()
   const toast = useToast()
+  const user = useOutletContext<User>()
+  const isStudent = user.role === 'student'
   const { selectedQid, setSelectedQid, mobileTab, setMobileTab, setFilter } = useUi()
   const [showPaper, setShowPaper] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -170,7 +172,7 @@ export function JobPage() {
           {job.student_name && (
             <p className="mt-0.5 flex items-center gap-1 text-xs text-dim">
               <Icon name="user" size={12} /> {job.student_name}
-              {job.paper_id && (
+              {job.paper_id && !isStudent && (
                 <>
                   {' · '}
                   <Link to={`/papers/${job.paper_id}`} className="text-primary-600 hover:underline dark:text-primary-400">
@@ -241,7 +243,7 @@ export function JobPage() {
 
         <section className={`card p-5 ${mobileTab !== 'detail' ? 'hidden lg:block' : ''}`}>
           {selected ? (
-            <QuestionDetail job={job} question={selected} />
+            <QuestionDetail job={job} question={selected} canEdit={!isStudent} />
           ) : (
             <div className="py-16 text-center">
               <Icon name="grid" size={28} className="mx-auto text-dim" />

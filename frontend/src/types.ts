@@ -4,7 +4,7 @@ export type ExplainState = 'none' | 'queued' | 'generating' | 'done' | 'failed'
 export interface User {
   id: number
   username: string
-  role: 'admin' | 'user'
+  role: 'admin' | 'user' | 'student'
 }
 
 export interface Explanation {
@@ -71,6 +71,7 @@ export interface Student {
   created_at: number
   submission_count: number
   wrong_total: number | null
+  account_username?: string | null
 }
 
 export interface PaperQuestion {

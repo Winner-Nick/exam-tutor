@@ -84,10 +84,24 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+def require_teacher(user: dict = Depends(get_current_user)) -> dict:
+    """老师/管理员：试卷管理、判分修正等能力不对学生账号开放。"""
+    if user["role"] == "student":
+        raise HTTPException(403, "学生账号无此权限")
+    return user
+
+
 def get_owned_job(job_id: str, user: dict = Depends(get_current_user)) -> dict:
-    """作业归属校验。查无与不属于均返回 404，不泄露作业是否存在。"""
+    """作业归属校验。查无与不属于均返回 404，不泄露作业是否存在。
+
+    老师可见名下全部；学生账号只能访问挂在「自己档案」下的提交。"""
     job = store.get_job(job_id)
-    if not job or job["user_id"] != user["id"]:
+    if not job:
+        raise HTTPException(404, "作业不存在")
+    if user["role"] == "student":
+        if job["user_id"] != user.get("teacher_id") or job["student_id"] != user.get("student_id"):
+            raise HTTPException(404, "作业不存在")
+    elif job["user_id"] != user["id"]:
         raise HTTPException(404, "作业不存在")
     return job
 

@@ -116,6 +116,36 @@ def count_users() -> int:
 
 
 # ---------------------------------------------------------------------------
+# 学生登录账号（挂在老师账号 + 学生档案下）
+# ---------------------------------------------------------------------------
+
+def create_student_account(teacher_id: int, student_row_id: int,
+                           username: str, password_hash: str) -> int:
+    conn = get_conn()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO users (username, password_hash, role, created_at, teacher_id, student_id)
+               VALUES (?, ?, 'student', ?, ?, ?)""",
+            (username, password_hash, time.time(), teacher_id, student_row_id),
+        )
+    return cur.lastrowid
+
+
+def get_account_for_student(student_row_id: int) -> dict | None:
+    row = get_conn().execute(
+        "SELECT * FROM users WHERE student_id = ?", (student_row_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_student_account(student_row_id: int) -> bool:
+    conn = get_conn()
+    with conn:
+        cur = conn.execute("DELETE FROM users WHERE student_id = ?", (student_row_id,))
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
 # invite codes
 # ---------------------------------------------------------------------------
 
@@ -500,8 +530,10 @@ def list_students(user_id: int) -> list[dict]:
     rows = get_conn().execute(
         """SELECT s.*, COUNT(j.id) AS submission_count,
                   SUM(CASE WHEN j.status = 'done'
-                       THEN json_extract(j.stats_json, '$.wrong') ELSE 0 END) AS wrong_total
+                       THEN json_extract(j.stats_json, '$.wrong') ELSE 0 END) AS wrong_total,
+                  u.username AS account_username
            FROM students s LEFT JOIN jobs j ON j.student_id = s.id
+           LEFT JOIN users u ON u.student_id = s.id
            WHERE s.user_id = ?
            GROUP BY s.id ORDER BY s.is_self DESC, s.created_at""",
         (user_id,),

@@ -278,7 +278,7 @@ export function SettingsPage() {
           <p className="min-w-0 truncate text-sm text-ink2">
             {user.username}
             <span className="ml-2 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-dim">
-              {user.role === 'admin' ? '管理员' : '普通用户'}
+              {user.role === 'admin' ? '管理员' : user.role === 'student' ? '学生' : '老师'}
             </span>
           </p>
           <button onClick={logout} className="btn-danger shrink-0 px-3 py-1.5 text-sm">

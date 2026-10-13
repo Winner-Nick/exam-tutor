@@ -204,7 +204,22 @@ def _v7(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7]
+def _v8(conn: sqlite3.Connection) -> None:
+    """学生登录账号：users 可挂载到所属老师（teacher_id）与学生档案（student_id）。
+
+    role='student' 的账号由老师创建；其产生的批改记录仍归老师账号所有
+    （jobs.user_id = 老师），学生端按 student_id 过滤只见自己的。"""
+    _add_column_if_missing(conn, "users", "teacher_id", "INTEGER REFERENCES users(id)")
+    _add_column_if_missing(conn, "users", "student_id", "INTEGER REFERENCES students(id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_teacher ON users(teacher_id)")
+    # 一个学生档案至多绑一个登录账号
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_student "
+        "ON users(student_id) WHERE student_id IS NOT NULL"
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8]
 
 
 def init_db() -> None:

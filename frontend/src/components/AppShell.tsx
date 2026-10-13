@@ -5,7 +5,7 @@ import type { User } from '../types'
 import { FeedbackDialog } from './FeedbackDialog'
 import { Icon, type IconName } from './Icon'
 
-const navItems: { to: string; label: string; icon: IconName; end?: boolean }[] = [
+const teacherNav: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: '/', label: '批改', icon: 'pen', end: true },
   { to: '/papers', label: '试卷库', icon: 'book' },
   { to: '/students', label: '学生', icon: 'users' },
@@ -14,9 +14,17 @@ const navItems: { to: string; label: string; icon: IconName; end?: boolean }[] =
   { to: '/settings', label: '设置', icon: 'settings' },
 ]
 
+const studentNav: typeof teacherNav = [
+  { to: '/', label: '批改', icon: 'pen', end: true },
+  { to: '/mistakes', label: '错题本', icon: 'bookmark' },
+  { to: '/stats', label: '统计', icon: 'chart' },
+  { to: '/settings', label: '设置', icon: 'settings' },
+]
+
 export function AppShell({ user, children }: { user: User; children: ReactNode }) {
   const { theme, toggleTheme } = useUi()
   const [showFeedback, setShowFeedback] = useState(false)
+  const navItems = user.role === 'student' ? studentNav : teacherNav
 
   return (
     <div className="min-h-screen">

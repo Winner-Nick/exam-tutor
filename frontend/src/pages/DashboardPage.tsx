@@ -1,15 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { DonutChart } from '../components/DonutChart'
 import { Icon } from '../components/Icon'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
 import { compressPicked } from '../utils/compressImage'
-import type { Job } from '../types'
+import type { Job, User } from '../types'
 
-function JobCard({ job, onDelete }: { job: Job; onDelete: () => void }) {
+function JobCard({ job, canDelete, onDelete }: { job: Job; canDelete: boolean; onDelete: () => void }) {
   const navigate = useNavigate()
   const title = job.paper_title || job.meta?.title || job.filename || '试卷'
   const date = new Date(job.created_at * 1000).toLocaleDateString('zh-CN', {
@@ -81,7 +81,7 @@ function JobCard({ job, onDelete }: { job: Job; onDelete: () => void }) {
             )}
           </div>
         </div>
-        {job.status !== 'processing' && (
+        {canDelete && job.status !== 'processing' && (
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -106,6 +106,8 @@ export function DashboardPage() {
   const toast = useToast()
   const navigate = useNavigate()
   const [params] = useSearchParams()
+  const user = useOutletContext<User>()
+  const isStudent = user.role === 'student'
   const cameraRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -181,54 +183,62 @@ export function DashboardPage() {
       <div className="card space-y-5 p-5 sm:p-6">
         <h3 className="section-title flex items-center gap-2">
           <Icon name="pen" size={18} className="text-primary-600 dark:text-primary-400" />
-          批改新作业
+          {isStudent ? '上传我的作答' : '批改新作业'}
         </h3>
 
-        {/* 1. 选学生 */}
-        <div>
-          <p className="mb-2.5 flex items-center gap-2 text-sm font-medium">
-            <span className={stepBadge}>1</span> 谁做的题？
-          </p>
-          {students.isPending ? (
-            <div className="flex gap-2">
-              <div className="skeleton h-9 w-20 rounded-full" />
-              <div className="skeleton h-9 w-20 rounded-full" />
-            </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              {(students.data?.students ?? []).map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => setStudentId(s.id)}
-                  className={`chip ${studentId === s.id ? 'chip-active' : ''}`}
+        {/* 1. 选学生（学生账号默认就是自己，不展示） */}
+        {!isStudent && (
+          <div>
+            <p className="mb-2.5 flex items-center gap-2 text-sm font-medium">
+              <span className={stepBadge}>1</span> 谁做的题？
+            </p>
+            {students.isPending ? (
+              <div className="flex gap-2">
+                <div className="skeleton h-9 w-20 rounded-full" />
+                <div className="skeleton h-9 w-20 rounded-full" />
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                {(students.data?.students ?? []).map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setStudentId(s.id)}
+                    className={`chip ${studentId === s.id ? 'chip-active' : ''}`}
+                  >
+                    <Icon name="user" size={14} />
+                    {s.is_self ? '我自己' : s.name}
+                  </button>
+                ))}
+                <Link
+                  to="/students"
+                  className="flex items-center gap-0.5 text-sm text-primary-600 hover:underline dark:text-primary-400"
                 >
-                  <Icon name="user" size={14} />
-                  {s.is_self ? '我自己' : s.name}
-                </button>
-              ))}
-              <Link
-                to="/students"
-                className="flex items-center gap-0.5 text-sm text-primary-600 hover:underline dark:text-primary-400"
-              >
-                <Icon name="plus" size={14} /> 管理学生
-              </Link>
-            </div>
-          )}
-        </div>
+                  <Icon name="plus" size={14} /> 管理学生
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 2. 选试卷 */}
         <div>
           <p className="mb-2.5 flex items-center gap-2 text-sm font-medium">
-            <span className={stepBadge}>2</span> 做的哪份题？
+            <span className={stepBadge}>{isStudent ? 1 : 2}</span> 做的哪份题？
           </p>
           {papers.isPending ? (
             <div className="skeleton h-10 max-w-md rounded-xl" />
           ) : readyPapers.length === 0 ? (
             <p className="text-sm text-dim">
-              试卷库还没有可用的试卷，先去
-              <Link to="/papers" className="mx-1 text-primary-600 hover:underline dark:text-primary-400">
-                录入试卷（题目+答案）
-              </Link>
+              {isStudent ? (
+                '老师还没有录入试卷，请先告诉老师录入'
+              ) : (
+                <>
+                  试卷库还没有可用的试卷，先去
+                  <Link to="/papers" className="mx-1 text-primary-600 hover:underline dark:text-primary-400">
+                    录入试卷（题目+答案）
+                  </Link>
+                </>
+              )}
             </p>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
@@ -248,12 +258,14 @@ export function DashboardPage() {
                   </option>
                 ))}
               </select>
-              <Link
-                to="/papers"
-                className="flex items-center gap-0.5 text-sm text-primary-600 hover:underline dark:text-primary-400"
-              >
-                <Icon name="plus" size={14} /> 新试卷
-              </Link>
+              {!isStudent && (
+                <Link
+                  to="/papers"
+                  className="flex items-center gap-0.5 text-sm text-primary-600 hover:underline dark:text-primary-400"
+                >
+                  <Icon name="plus" size={14} /> 新试卷
+                </Link>
+              )}
             </div>
           )}
         </div>
@@ -261,7 +273,7 @@ export function DashboardPage() {
         {/* 3. 上传作答 */}
         <div>
           <p className="mb-2.5 flex flex-wrap items-center gap-2 text-sm font-medium">
-            <span className={stepBadge}>3</span> 上传做题结果
+            <span className={stepBadge}>{isStudent ? 2 : 3}</span> 上传做题结果
             <span className="text-xs font-normal text-dim">
               一次最多 12 张；可以先拍一部分，之后在批改结果页随时「补拍补传」
             </span>
@@ -289,15 +301,17 @@ export function DashboardPage() {
                 </>
               )}
             </button>
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-dim">
-              <input
-                type="checkbox"
-                checked={usePaperFiles}
-                onChange={(e) => setUsePaperFiles(e.target.checked)}
-                className="rounded accent-primary-600"
-              />
-              学生直接答在试卷文件上（复用试卷扫描件，无需再传）
-            </label>
+            {!isStudent && (
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-dim">
+                <input
+                  type="checkbox"
+                  checked={usePaperFiles}
+                  onChange={(e) => setUsePaperFiles(e.target.checked)}
+                  className="rounded accent-primary-600"
+                />
+                学生直接答在试卷文件上（复用试卷扫描件，无需再传）
+              </label>
+            )}
           </div>
           {files.length > 0 && !usePaperFiles && (
             <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -359,7 +373,7 @@ export function DashboardPage() {
               </>
             )
           ) : (
-            '开始批改'
+            isStudent ? '提交批改' : '开始批改'
           )}
         </button>
       </div>
@@ -388,6 +402,7 @@ export function DashboardPage() {
               <JobCard
                 key={j.id}
                 job={j}
+                canDelete={!isStudent}
                 onDelete={() => {
                   if (confirm('确定删除这次批改及其讲解记录吗？')) del.mutate(j.id)
                 }}

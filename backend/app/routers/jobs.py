@@ -32,16 +32,23 @@ async def create_submission(
     user: dict = Depends(auth.get_current_user),
 ):
     security.hit(f"upload:{user['id']}", 20, 3600, "提交过于频繁，请 1 小时后再试")
-    if store.count_processing(user["id"]) >= settings.max_processing_per_user:
+
+    # 学生账号：归属到所属老师名下、锁定为「自己」的学生档案，只能传作答照片/PDF
+    if user["role"] == "student":
+        owner_id, student_id = user["teacher_id"], user["student_id"]
+        use_paper_files = False
+    else:
+        owner_id = user["id"]
+    if store.count_processing(owner_id) >= settings.max_processing_per_user:
         raise HTTPException(429, "已有批改正在处理中，请稍后再提交")
 
     paper = store.get_paper(paper_id)
-    if not paper or paper["user_id"] != user["id"]:
+    if not paper or paper["user_id"] != owner_id:
         raise HTTPException(404, "试卷不存在")
     if paper["status"] != "ready":
         raise HTTPException(409, "试卷尚未识别完成，暂不能批改")
     student = store.get_student(student_id)
-    if not student or student["user_id"] != user["id"]:
+    if not student or student["user_id"] != owner_id:
         raise HTTPException(404, "学生不存在")
     if not use_paper_files and not files:
         raise HTTPException(400, "请上传作答的照片或 PDF")
@@ -78,7 +85,7 @@ async def create_submission(
         raise
 
     filename = manifest[0]["filename"] if manifest else None
-    store.create_job(job_id, user["id"], filename, kind="submission",
+    store.create_job(job_id, owner_id, filename, kind="submission",
                      paper_id=paper_id, student_id=student_id)
     workers.enqueue_job(job_id)
     return {"job_id": job_id}
@@ -120,6 +127,9 @@ async def add_submission_files(
 @router.get("/jobs")
 def list_jobs(student_id: int | None = None, paper_id: str | None = None,
               user: dict = Depends(auth.get_current_user)):
+    # 学生账号：所属老师名下、但只看「自己」这份档案的提交
+    if user["role"] == "student":
+        return {"jobs": [_public(j) for j in store.list_jobs(user["teacher_id"], user["student_id"], paper_id)]}
     return {"jobs": [_public(j) for j in store.list_jobs(user["id"], student_id, paper_id)]}
 
 
@@ -129,7 +139,8 @@ def get_job(job: dict = Depends(auth.get_owned_job)):
 
 
 @router.delete("/jobs/{job_id}")
-def delete_job(job: dict = Depends(auth.get_owned_job)):
+def delete_job(job: dict = Depends(auth.get_owned_job),
+               user: dict = Depends(auth.require_teacher)):
     if job["status"] == "processing":
         raise HTTPException(409, "正在处理中，暂不能删除")
     store.delete_job(job["id"])

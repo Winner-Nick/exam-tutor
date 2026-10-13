@@ -6,7 +6,16 @@ import { ExplanationCard } from './ExplanationCard'
 import { StatusBadge } from './StatusBadge'
 import type { Job, Question } from '../types'
 
-export function QuestionDetail({ job, question }: { job: Job; question: Question }) {
+export function QuestionDetail({
+  job,
+  question,
+  canEdit = true,
+}: {
+  job: Job
+  question: Question
+  /** 老师才能人工核对/改判；学生只读查看 */
+  canEdit?: boolean
+}) {
   const qc = useQueryClient()
   const toast = useToast()
   const [showPassage, setShowPassage] = useState(false)
@@ -81,14 +90,16 @@ export function QuestionDetail({ job, question }: { job: Job; question: Question
               <button
                 key={k}
                 disabled={override.isPending}
-                onClick={() => override.mutate({ student_answer: k })}
-                title="点击把它设为学生的作答"
+                onClick={() => canEdit && override.mutate({ student_answer: k })}
+                title={canEdit ? '点击把它设为学生的作答' : undefined}
                 className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left text-sm transition-all disabled:opacity-60 ${
                   isCorrect
                     ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20'
                     : isStudent
                       ? 'border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20'
-                      : 'border-line bg-surface hover:border-primary-300 dark:hover:border-primary-700'
+                      : canEdit
+                        ? 'border-line bg-surface hover:border-primary-300 dark:hover:border-primary-700'
+                        : 'cursor-default border-line bg-surface'
                 }`}
               >
                 <span
@@ -113,19 +124,21 @@ export function QuestionDetail({ job, question }: { job: Job; question: Question
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-dim">人工核对：</span>
-        {(['correct', 'wrong', 'unknown'] as const).map((st) => (
-          <button
-            key={st}
-            disabled={override.isPending || question.status === st}
-            onClick={() => override.mutate({ status: st })}
-            className="btn-outline rounded-lg px-2.5 py-1 text-xs disabled:opacity-40"
-          >
-            标为{st === 'correct' ? '答对' : st === 'wrong' ? '答错' : '待确认'}
-          </button>
-        ))}
-      </div>
+      {canEdit && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-dim">人工核对：</span>
+          {(['correct', 'wrong', 'unknown'] as const).map((st) => (
+            <button
+              key={st}
+              disabled={override.isPending || question.status === st}
+              onClick={() => override.mutate({ status: st })}
+              className="btn-outline rounded-lg px-2.5 py-1 text-xs disabled:opacity-40"
+            >
+              标为{st === 'correct' ? '答对' : st === 'wrong' ? '答错' : '待确认'}
+            </button>
+          ))}
+        </div>
+      )}
 
       {(question.status === 'wrong' || question.status === 'unknown' || question.explanation) && (
         <ExplanationCard question={question} onRequestExplain={() => explain.mutate()} />
