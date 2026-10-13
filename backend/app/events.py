@@ -23,13 +23,16 @@ def set_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 
 def publish(job_id: str, event: str, data: dict) -> None:
-    """线程安全：可从任意 worker 线程调用。"""
+    """线程安全：可从任意 worker 线程调用。进程关停窗口内静默丢弃。"""
     if _loop is None:
         return
     with _lock:
         queues = list(_subs.get(job_id, ()))
     for q in queues:
-        _loop.call_soon_threadsafe(q.put_nowait, (event, data))
+        try:
+            _loop.call_soon_threadsafe(q.put_nowait, (event, data))
+        except RuntimeError:
+            return  # 事件循环已关闭（shutdown 中）
 
 
 def _subscribe(job_id: str) -> asyncio.Queue:

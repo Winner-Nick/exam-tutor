@@ -7,14 +7,24 @@ Python 对象），上层代码无需关心 JSON 列的编码细节。
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import shutil
+import sqlite3
 import time
 import uuid
 from pathlib import Path
 
 from .config import JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR
 from .db import get_conn
+
+
+def write_json_atomic(path: Path, data, indent: int | None = None) -> None:
+    """原子写 JSON：先写临时文件再 rename，崩溃/并发读不会拿到半截文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent), encoding="utf-8")
+    os.replace(tmp, path)
 
 # ---------------------------------------------------------------------------
 # 文件目录
@@ -66,9 +76,7 @@ def job_files(job_id: str) -> list[dict]:
 
 
 def save_job_files(job_id: str, files: list[dict]) -> None:
-    (job_dir(job_id) / "files.json").write_text(
-        json.dumps(files, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    write_json_atomic(job_dir(job_id) / "files.json", files, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -451,19 +459,26 @@ def reset_stale_explanations() -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 def ensure_self_student(user_id: int) -> dict:
-    """每个老师账号有一条 is_self 学生（"我自己"），首次访问时自动创建。"""
+    """每个老师账号有一条 is_self 学生（"我自己"），首次访问时自动创建。
+    唯一索引兜底并发首访；撞索引时重查已有记录。"""
     conn = get_conn()
     row = conn.execute(
         "SELECT * FROM students WHERE user_id = ? AND is_self = 1", (user_id,)
     ).fetchone()
     if row:
         return dict(row)
-    with conn:
-        cur = conn.execute(
-            "INSERT INTO students (user_id, name, is_self, created_at) VALUES (?, '我自己', 1, ?)",
-            (user_id, time.time()),
-        )
-    return get_student(cur.lastrowid)  # type: ignore[return-value]
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO students (user_id, name, is_self, created_at) VALUES (?, '我自己', 1, ?)",
+                (user_id, time.time()),
+            )
+        return get_student(cur.lastrowid)  # type: ignore[return-value]
+    except sqlite3.IntegrityError:
+        row = conn.execute(
+            "SELECT * FROM students WHERE user_id = ? AND is_self = 1", (user_id,)
+        ).fetchone()
+        return dict(row)
 
 
 def create_student(user_id: int, name: str) -> dict:
@@ -619,6 +634,35 @@ def count_processing_papers(user_id: int) -> int:
     ).fetchone()[0]
 
 
+def try_mark_paper_processing(paper_id: str) -> bool:
+    """原子占位：仅当试卷当前非 processing 时置为 processing。防双击/重试导致
+    同一试卷被两个 worker 并发处理（渲染目录会被互相清空）。"""
+    conn = get_conn()
+    with conn:
+        cur = conn.execute(
+            """UPDATE papers SET status = 'processing', stage = 'queued',
+                      progress_done = 0, progress_total = 1, progress_label = '排队中…',
+                      error = NULL
+               WHERE id = ? AND status != 'processing'""",
+            (paper_id,),
+        )
+    return cur.rowcount > 0
+
+
+def try_mark_job_processing(job_id: str) -> bool:
+    """同上，作答提交补拍时的原子占位。"""
+    conn = get_conn()
+    with conn:
+        cur = conn.execute(
+            """UPDATE jobs SET status = 'processing', stage = 'queued',
+                      progress_done = 0, progress_total = 1, progress_label = '排队中…',
+                      error = NULL
+               WHERE id = ? AND status != 'processing'""",
+            (job_id,),
+        )
+    return cur.rowcount > 0
+
+
 def list_processing_paper_ids() -> list[str]:
     rows = get_conn().execute("SELECT id FROM papers WHERE status = 'processing'").fetchall()
     return [r["id"] for r in rows]
@@ -654,6 +698,13 @@ def set_paper_file_sha(file_id: str, sha256: str) -> None:
         conn.execute("UPDATE paper_files SET sha256 = ? WHERE id = ?", (sha256, file_id))
 
 
+def delete_paper_file(file_id: str) -> None:
+    """上传校验失败时清理登记行，避免 files 列表出现幽灵文件。"""
+    conn = get_conn()
+    with conn:
+        conn.execute("DELETE FROM paper_files WHERE id = ?", (file_id,))
+
+
 def update_paper_file(file_id: str, page_start: int, page_count: int) -> None:
     conn = get_conn()
     with conn:
@@ -678,6 +729,7 @@ def _pq_row_to_dict(row) -> dict:
         "passage": row["passage"],
         "correct_answer": row["correct_answer"],
         "knowledge_point": row["knowledge_point"],
+        "edited": bool(row["edited"]) if "edited" in row.keys() else False,
     }
 
 
@@ -687,14 +739,15 @@ def replace_paper_questions(paper_id: str, questions: list[dict]) -> None:
         conn.execute("DELETE FROM paper_questions WHERE paper_id = ?", (paper_id,))
         conn.executemany(
             """INSERT INTO paper_questions (paper_id, qid, number, section, type, stem,
-                   options_json, passage, correct_answer, knowledge_point)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   options_json, passage, correct_answer, knowledge_point, edited)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     paper_id, q["id"], q.get("number"), q.get("section"), q.get("type"),
                     q.get("stem"),
                     json.dumps(q["options"], ensure_ascii=False) if q.get("options") else None,
                     q.get("passage"), q.get("correct_answer"), q.get("knowledge_point"),
+                    1 if q.get("edited") else 0,
                 )
                 for q in questions
             ],
@@ -720,9 +773,10 @@ def add_paper_question(paper_id: str, number: str, correct_answer: str | None,
     qid = "q" + number
     conn = get_conn()
     with conn:
+        # 手工录入的题目标记 edited：重新识别时不被视觉结果覆盖
         conn.execute(
-            """INSERT INTO paper_questions (paper_id, qid, number, type, correct_answer)
-               VALUES (?, ?, ?, ?, ?)""",
+            """INSERT INTO paper_questions (paper_id, qid, number, type, correct_answer, edited)
+               VALUES (?, ?, ?, ?, ?, 1)""",
             (paper_id, qid, number, qtype, correct_answer),
         )
     return get_paper_question(paper_id, qid)
@@ -740,8 +794,9 @@ def delete_paper_question(paper_id: str, qid: str) -> bool:
 def update_paper_question_answer(paper_id: str, qid: str, correct_answer: str | None) -> None:
     conn = get_conn()
     with conn:
+        # 老师手工改答案 → edited=1，此后重新识别以人工值为准
         conn.execute(
-            "UPDATE paper_questions SET correct_answer = ? WHERE paper_id = ? AND qid = ?",
+            "UPDATE paper_questions SET correct_answer = ?, edited = 1 WHERE paper_id = ? AND qid = ?",
             (correct_answer, paper_id, qid),
         )
 

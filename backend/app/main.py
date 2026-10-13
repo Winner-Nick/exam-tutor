@@ -25,6 +25,10 @@ from .security import OriginCheckMiddleware, SecurityHeadersMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    problems = settings.validate()
+    if problems:
+        # 缺密钥（尤其 JWT_SECRET）时拒绝启动，避免空密钥签发的会话可被伪造
+        raise RuntimeError("配置不完整，拒绝启动：\n- " + "\n- ".join(problems))
     init_db()
     events.set_loop(asyncio.get_running_loop())
     workers.start()
@@ -51,8 +55,8 @@ app.include_router(insights_router.router)
 
 @app.get("/api/health")
 def health():
-    problems = settings.validate()
-    return JSONResponse({"ok": not problems, "problems": problems})
+    # 未认证可见：不透露具体缺哪项配置（避免广播可利用面），详情见启动日志
+    return JSONResponse({"ok": True})
 
 
 
@@ -68,9 +72,11 @@ if (FRONTEND_DIST / "assets").exists():
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str):
     # dist 根下的真实静态文件（manifest、图标等）直接返回；其余走 SPA fallback
-    if path and ".." not in path:
-        f = FRONTEND_DIST / path
-        if f.is_file():
+    # 安全：path 以 "/" 开头时 Path 拼接会坍缩成绝对路径（如 //etc/passwd），
+    # 必须 lstrip 后再 resolve 并校验仍在 dist 内
+    if path:
+        f = (FRONTEND_DIST / path.lstrip("/")).resolve()
+        if f.is_file() and f.is_relative_to(FRONTEND_DIST.resolve()):
             return FileResponse(f)
     index = FRONTEND_DIST / "index.html"
     if not index.exists():

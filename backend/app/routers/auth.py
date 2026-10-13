@@ -17,6 +17,10 @@ admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
 def register(req: RegisterRequest, request: Request, response: Response):
     security.hit(f"register:{security.client_ip(request)}", 5, 60)
 
+    # 先查用户名占用，再核销邀请码：冲突时不能让邀请次数白白烧掉
+    if store.get_user_by_username(req.username.strip()):
+        raise HTTPException(400, "用户名已被占用")
+
     bootstrap = store.count_users() == 0  # 首个用户：免邀请码并成为管理员
     if not bootstrap and not settings.allow_open_register:
         if not req.invite_code or not store.consume_invite(req.invite_code.strip()):
@@ -60,7 +64,9 @@ def me(user: dict = Depends(auth.get_current_user)):
 
 
 @router.post("/password")
-def change_password(req: ChangePasswordRequest, user: dict = Depends(auth.get_current_user)):
+def change_password(req: ChangePasswordRequest, request: Request, user: dict = Depends(auth.get_current_user)):
+    # bcrypt 单次 ~250ms，限速防已劫持会话被用来爆破原密码
+    security.hit(f"pwd:{user['id']}:{security.client_ip(request)}", 5, 300, "尝试过于频繁，请 5 分钟后再试")
     if not auth.verify_password(req.old_password, user["password_hash"]):
         raise HTTPException(400, "原密码错误")
     store.set_password(user["id"], auth.hash_password(req.new_password))

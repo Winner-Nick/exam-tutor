@@ -29,6 +29,15 @@ _cache: dict = {"at": 0.0, "data": None}
 _cache_lock = threading.Lock()
 _TAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,50}$")
 
+# 按 tag 串行化 APK 首下：并发写同一 .part 会字节交错，rename 出损坏包被长期分发
+_apk_locks: dict[str, threading.Lock] = {}
+_apk_locks_guard = threading.Lock()
+
+
+def _apk_lock(tag: str) -> threading.Lock:
+    with _apk_locks_guard:
+        return _apk_locks.setdefault(tag, threading.Lock())
+
 
 def _disk_cache_path():
     RELEASES_DIR.mkdir(parents=True, exist_ok=True)
@@ -98,17 +107,19 @@ def download_apk(tag: str, request: Request):
     RELEASES_DIR.mkdir(parents=True, exist_ok=True)
     cached = RELEASES_DIR / f"{tag}.apk"
     if not cached.exists():
-        tmp = cached.with_suffix(".part")
-        try:
-            with httpx.stream("GET", rel["apk_url"], follow_redirects=True, timeout=120) as r:
-                r.raise_for_status()
-                with tmp.open("wb") as f:
-                    for chunk in r.iter_bytes(1 << 20):
-                        f.write(chunk)
-            tmp.rename(cached)
-        except Exception:  # noqa: BLE001
-            tmp.unlink(missing_ok=True)
-            raise HTTPException(502, "安装包拉取失败，请稍后再试") from None
+        with _apk_lock(tag):
+            if not cached.exists():  # 等锁期间可能已被其他请求下载好
+                tmp = RELEASES_DIR / f"{tag}.{threading.get_ident()}.part"
+                try:
+                    with httpx.stream("GET", rel["apk_url"], follow_redirects=True, timeout=120) as r:
+                        r.raise_for_status()
+                        with tmp.open("wb") as f:
+                            for chunk in r.iter_bytes(1 << 20):
+                                f.write(chunk)
+                    tmp.replace(cached)
+                except Exception:  # noqa: BLE001
+                    tmp.unlink(missing_ok=True)
+                    raise HTTPException(502, "安装包拉取失败，请稍后再试") from None
 
     filename = f"错题家教-{tag}.apk"
     return FileResponse(

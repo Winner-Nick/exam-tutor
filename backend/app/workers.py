@@ -135,12 +135,19 @@ def _process_explain_batch(job_id: str, qids: list[str]) -> None:
 
     for q in targets:
         exp = by_id.get(q["id"])
-        if exp:
-            fields = {"explanation": exp, "explain_state": "done"}
-            if exp.get("knowledge_point") and not q.get("knowledge_point"):
-                fields["knowledge_point"] = exp["knowledge_point"]
-            store.update_question(job_id, q["id"], **fields)
-            events.publish(job_id, "question_explained", {"qid": q["id"], "state": "done"})
-        else:
-            store.update_question(job_id, q["id"], explain_state="failed")
-            events.publish(job_id, "question_explained", {"qid": q["id"], "state": "failed"})
+        # 单题写回失败（如锁超时）不能拖垮整批：该题复位 failed，其余照常
+        try:
+            if exp:
+                fields = {"explanation": exp, "explain_state": "done"}
+                if exp.get("knowledge_point") and not q.get("knowledge_point"):
+                    fields["knowledge_point"] = exp["knowledge_point"]
+                store.update_question(job_id, q["id"], **fields)
+                events.publish(job_id, "question_explained", {"qid": q["id"], "state": "done"})
+            else:
+                store.update_question(job_id, q["id"], explain_state="failed")
+                events.publish(job_id, "question_explained", {"qid": q["id"], "state": "failed"})
+        except Exception:  # noqa: BLE001
+            try:
+                store.update_question(job_id, q["id"], explain_state="failed")
+            except Exception:  # noqa: BLE001
+                pass

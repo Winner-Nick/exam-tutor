@@ -1,6 +1,8 @@
 """试卷库路由：上传（题目/答案可分多文件、可补传）、核对答案、页面图、SSE。"""
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -19,7 +21,11 @@ async def _save_paper_files(paper_id: str, files: list[UploadFile], kind: str) -
     for f in files:
         fid = store.add_paper_file(paper_id, kind, f.filename, None)
         dest_stem = store.paper_dir(paper_id) / "files" / fid
-        _, sha = await security.save_upload(f, dest_stem, allow_pdf=True, allow_image=True)
+        try:
+            _, sha = await security.save_upload(f, dest_stem, allow_pdf=True, allow_image=True)
+        except Exception:
+            store.delete_paper_file(fid)  # 不留幽灵登记行
+            raise
         store.set_paper_file_sha(fid, sha)
 
 
@@ -68,16 +74,21 @@ async def add_files(
 ):
     """补传文件（典型场景：答案在另一份 PDF/照片里）。上传后整卷重新汇总，
     已核对的答案会保留，已识别过的文件走缓存不重复花钱。"""
-    if paper["status"] == "processing":
-        raise HTTPException(409, "试卷正在识别中，请稍后再补传")
     if not files or len(files) > MAX_FILES_PER_REQUEST:
         raise HTTPException(400, f"一次最多上传 {MAX_FILES_PER_REQUEST} 个文件")
     if kind not in _FILE_KINDS:
         raise HTTPException(400, "无效的文件类型标记")
-    await _save_paper_files(paper["id"], files, kind)
-    store.update_paper(paper["id"], status="processing", stage="queued",
-                       progress_done=0, progress_total=1, progress_label="排队中…",
-                       error=None)
+    # 原子占位：双击/重试的并发请求只有一个能进入，防同卷被并发处理
+    if not store.try_mark_paper_processing(paper["id"]):
+        raise HTTPException(409, "试卷正在识别中，请稍后再补传")
+    prev_status = paper["status"]
+    try:
+        await _save_paper_files(paper["id"], files, kind)
+    except Exception:
+        # 上传失败：恢复占位前的状态，让试卷可用
+        store.update_paper(paper["id"], status=prev_status, stage="done",
+                           progress_done=1, progress_total=1, progress_label="完成")
+        raise
     workers.enqueue_paper(paper["id"])
     return {"ok": True}
 
@@ -110,18 +121,19 @@ def delete_paper(paper: dict = Depends(auth.get_owned_paper)):
         raise HTTPException(409, "试卷正在识别中，暂不能删除")
     if store.list_submission_ids_for_paper(paper["id"]):
         raise HTTPException(409, "该试卷已有批改记录，请先删除对应记录")
-    store.delete_paper(paper["id"])
+    try:
+        store.delete_paper(paper["id"])
+    except sqlite3.IntegrityError:
+        # 检查与删除之间恰好产生了新提交
+        raise HTTPException(409, "该试卷已有批改记录，请先删除对应记录") from None
     return {"ok": True}
 
 
 @router.post("/{paper_id}/reprocess", status_code=202)
 def reprocess(paper: dict = Depends(auth.get_owned_paper)):
     """识别失败或效果不佳时手动重跑（已识别文件命中缓存，不重复花钱）。"""
-    if paper["status"] == "processing":
+    if not store.try_mark_paper_processing(paper["id"]):
         raise HTTPException(409, "试卷正在识别中")
-    store.update_paper(paper["id"], status="processing", stage="queued",
-                       progress_done=0, progress_total=1, progress_label="排队中…",
-                       error=None)
     workers.enqueue_paper(paper["id"])
     return {"ok": True}
 
@@ -132,12 +144,13 @@ def add_question(req: PaperQuestionCreateRequest, paper: dict = Depends(auth.get
     if paper["status"] == "processing":
         raise HTTPException(409, "试卷正在识别中")
     number = req.number.strip()
-    if store.get_paper_question(paper["id"], "q" + number):
-        raise HTTPException(409, f"题号 {number} 已存在")
     if len(store.get_paper_questions(paper["id"])) >= 200:
         raise HTTPException(400, "题目数量已达上限")
     ca = (req.correct_answer or "").strip() or None
-    return store.add_paper_question(paper["id"], number, ca, (req.type or "").strip() or None)
+    try:
+        return store.add_paper_question(paper["id"], number, ca, (req.type or "").strip() or None)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f"题号 {number} 已存在") from None
 
 
 @router.delete("/{paper_id}/questions/{qid}")
@@ -159,7 +172,15 @@ def set_answer(qid: str, req: PaperAnswerRequest, paper: dict = Depends(auth.get
     store.update_paper_question_answer(paper["id"], qid, ca)
 
     regraded = 0
+    skipped_processing = 0
     for sub_id in store.list_submission_ids_for_paper(paper["id"]):
+        sub = store.get_job(sub_id)
+        if not sub:
+            continue
+        if sub["status"] == "processing":
+            # 在途提交会在判分前重读最新试卷答案，无需也无法在此刻改它
+            skipped_processing += 1
+            continue
         q = store.get_question(sub_id, qid)
         if not q:
             continue
@@ -170,7 +191,10 @@ def set_answer(qid: str, req: PaperAnswerRequest, paper: dict = Depends(auth.get
         if q["status"] in ("wrong", "unknown") and not q.get("explanation"):
             workers.enqueue_explanations(sub_id, [qid], priority=1)
         regraded += 1
-    return {"question": store.get_paper_question(paper["id"], qid), "regraded": regraded}
+    resp = {"question": store.get_paper_question(paper["id"], qid), "regraded": regraded}
+    if skipped_processing:
+        resp["note"] = f"{skipped_processing} 份正在批改的提交将自动使用新答案判分"
+    return resp
 
 
 @router.get("/{paper_id}/events")

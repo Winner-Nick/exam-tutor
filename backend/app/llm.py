@@ -15,10 +15,14 @@ from .config import settings
 _vision_client = OpenAI(
     api_key=settings.openrouter_api_key,
     base_url=settings.openrouter_base_url,
+    timeout=120,  # SDK 默认 600s 太长：单页卡死会占住 worker 近半小时
+    max_retries=0,  # 重试统一由 _retry 负责，避免 SDK×外层双重放大
 )
 _deepseek_client = OpenAI(
     api_key=settings.deepseek_api_key,
     base_url=settings.deepseek_base_url,
+    timeout=120,
+    max_retries=0,
 )
 
 

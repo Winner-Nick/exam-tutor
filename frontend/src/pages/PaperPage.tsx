@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError, paperPageImageUrl } from '../api'
 import { Icon } from '../components/Icon'
@@ -13,6 +13,12 @@ function AnswerCell({ paper, q }: { paper: Paper; q: PaperQuestion }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [value, setValue] = useState(q.correct_answer ?? '')
+
+  // 外部变化（重判、补传识别）后同步输入框，避免停留在旧值
+  const serverValue = q.correct_answer ?? ''
+  useEffect(() => {
+    setValue(serverValue)
+  }, [q.id, serverValue])
 
   const save = useMutation({
     mutationFn: () => api.setPaperAnswer(paper.id, q.id, value.trim() || null),

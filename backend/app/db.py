@@ -93,7 +93,14 @@ def _v1(conn: sqlite3.Connection) -> None:
 
 
 def _v2(conn: sqlite3.Connection) -> None:
-    conn.execute("ALTER TABLE invite_codes ADD COLUMN created_at REAL")
+    _add_column_if_missing(conn, "invite_codes", "created_at", "REAL")
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """幂等加列：迁移中途崩溃后重跑不会因 duplicate column 报错。"""
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def _v3(conn: sqlite3.Connection) -> None:
@@ -101,16 +108,16 @@ def _v3(conn: sqlite3.Connection) -> None:
     jobs 退化为一次"作答提交"（kind=submission），挂在 paper + student 下。"""
     conn.executescript(
         """
-        CREATE TABLE students (
+        CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id),
             name TEXT NOT NULL,
             is_self INTEGER NOT NULL DEFAULT 0,
             created_at REAL NOT NULL
         );
-        CREATE INDEX idx_students_user ON students(user_id);
+        CREATE INDEX IF NOT EXISTS idx_students_user ON students(user_id);
 
-        CREATE TABLE papers (
+        CREATE TABLE IF NOT EXISTS papers (
             id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id),
             title TEXT,
@@ -124,9 +131,9 @@ def _v3(conn: sqlite3.Connection) -> None:
             meta_json TEXT,
             created_at REAL NOT NULL
         );
-        CREATE INDEX idx_papers_user ON papers(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_papers_user ON papers(user_id, created_at DESC);
 
-        CREATE TABLE paper_files (
+        CREATE TABLE IF NOT EXISTS paper_files (
             id TEXT PRIMARY KEY,
             paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
             kind TEXT NOT NULL DEFAULT 'mixed',
@@ -136,9 +143,9 @@ def _v3(conn: sqlite3.Connection) -> None:
             page_count INTEGER,
             created_at REAL NOT NULL
         );
-        CREATE INDEX idx_pfiles_paper ON paper_files(paper_id);
+        CREATE INDEX IF NOT EXISTS idx_pfiles_paper ON paper_files(paper_id);
 
-        CREATE TABLE paper_questions (
+        CREATE TABLE IF NOT EXISTS paper_questions (
             id INTEGER PRIMARY KEY,
             paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
             qid TEXT NOT NULL,
@@ -152,26 +159,26 @@ def _v3(conn: sqlite3.Connection) -> None:
             knowledge_point TEXT,
             UNIQUE(paper_id, qid)
         );
-        CREATE INDEX idx_pq_paper ON paper_questions(paper_id);
+        CREATE INDEX IF NOT EXISTS idx_pq_paper ON paper_questions(paper_id);
         """
     )
-    conn.execute("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'")
-    conn.execute("ALTER TABLE jobs ADD COLUMN paper_id TEXT REFERENCES papers(id)")
-    conn.execute("ALTER TABLE jobs ADD COLUMN student_id INTEGER REFERENCES students(id)")
-    conn.execute("CREATE INDEX idx_jobs_paper ON jobs(paper_id)")
-    conn.execute("CREATE INDEX idx_jobs_student ON jobs(student_id)")
+    _add_column_if_missing(conn, "jobs", "kind", "TEXT NOT NULL DEFAULT 'legacy'")
+    _add_column_if_missing(conn, "jobs", "paper_id", "TEXT REFERENCES papers(id)")
+    _add_column_if_missing(conn, "jobs", "student_id", "INTEGER REFERENCES students(id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_paper ON jobs(paper_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_student ON jobs(student_id)")
 
 
 def _v4(conn: sqlite3.Connection) -> None:
     """questions.overridden：老师人工修正过的答案/判定，补拍重跑时不被覆盖。"""
-    conn.execute("ALTER TABLE questions ADD COLUMN overridden INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "questions", "overridden", "INTEGER NOT NULL DEFAULT 0")
 
 
 def _v5(conn: sqlite3.Connection) -> None:
     """用户反馈：自动附带客户端诊断信息（设备/内核/报错），管理员可查看。"""
     conn.executescript(
         """
-        CREATE TABLE feedback (
+        CREATE TABLE IF NOT EXISTS feedback (
             id INTEGER PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id),
             message TEXT,
@@ -179,12 +186,25 @@ def _v5(conn: sqlite3.Connection) -> None:
             diag_json TEXT,
             created_at REAL NOT NULL
         );
-        CREATE INDEX idx_feedback_at ON feedback(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_feedback_at ON feedback(created_at DESC);
         """
     )
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5]
+def _v6(conn: sqlite3.Connection) -> None:
+    """paper_questions.edited：老师手工录入/核对过的答案，重新识别时不被覆盖。"""
+    _add_column_if_missing(conn, "paper_questions", "edited", "INTEGER NOT NULL DEFAULT 0")
+
+
+def _v7(conn: sqlite3.Connection) -> None:
+    """students 每用户至多一条"我自己"：防并发首访产生重复记录。"""
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_students_self "
+        "ON students(user_id) WHERE is_self = 1"
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7]
 
 
 def init_db() -> None:

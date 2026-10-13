@@ -62,6 +62,12 @@ def render_pdf_to_images(
     paths: list[Path] = []
     try:
         for i, page in enumerate(doc):
+            # 防御"尺寸炸弹"页：超大 MediaBox 渲染时会分配巨量内存（DoS）
+            rect = page.rect
+            if (rect.width * dpi / 72) * (rect.height * dpi / 72) > 40_000_000:
+                raise ValueError(
+                    f"第 {i + 1} 页物理尺寸异常（{rect.width:.0f}x{rect.height:.0f}pt），疑似损坏或恶意文件"
+                )
             pix = page.get_pixmap(dpi=dpi, alpha=False)
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             img = _normalize(img, max_dim, grayscale)

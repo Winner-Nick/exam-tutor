@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
 
 from . import events, llm, pdf_utils, prompts, store
 
@@ -165,33 +166,43 @@ def _renumber_pages(pages: list[dict]) -> None:
                 q["number"] = g
 
 
+def _grade_one(q: dict) -> None:
+    """单题判分（_grade_all 与 regrade 共用同一套规则，保证初判与改判一致）。
+
+    规则：
+    - 主观题（作文/写作类提示，或既无选项又无标准答案）→ subjective
+    - 有选项（选择题）：学生没答 → unknown；有标准答案则严格比对
+    - 无选项（填空/简答）：完全一致判对；答案是单个字母（实为选择题特征）不一致判错；
+      其余不一致不轻易判错（手写转写有误差），标 unknown 交人工
+    """
+    opts = q.get("options")
+    ca = q.get("correct_answer")
+    sa = q.get("student_answer")
+    hint = f"{q.get('type') or ''}{q.get('section') or ''}"
+    if any(h in hint for h in _SUBJECTIVE_HINT) or (not opts and not ca):
+        q["status"] = "subjective"
+    elif opts:
+        if not sa:
+            q["status"] = "unknown"
+        elif ca and sa.strip().upper() == ca.strip().upper():
+            q["status"] = "correct"
+        elif ca:
+            q["status"] = "wrong"
+        else:
+            q["status"] = "unknown"
+    else:
+        sa_s, ca_s = (sa or "").strip(), (ca or "").strip()
+        if sa_s and ca_s and sa_s.lower() == ca_s.lower():
+            q["status"] = "correct"
+        elif sa_s and len(ca_s) == 1 and ca_s.isalpha():
+            q["status"] = "wrong"
+        else:
+            q["status"] = "unknown"
+
+
 def _grade_all(questions: list[dict]) -> None:
     for q in questions:
-        opts = q.get("options")
-        ca = q.get("correct_answer")
-        sa = q.get("student_answer")
-        hint = f"{q.get('type') or ''}{q.get('section') or ''}"
-        if any(h in hint for h in _SUBJECTIVE_HINT) or (not opts and not ca):
-            q["status"] = "subjective"
-        elif opts:
-            if not sa:
-                q["status"] = "unknown"
-            elif ca and sa.strip().upper() == ca.strip().upper():
-                q["status"] = "correct"
-            elif ca:
-                q["status"] = "wrong"
-            else:
-                q["status"] = "unknown"
-        else:
-            # 无选项信息（如仅答案建卷的存根题）：答案若是单个字母按选择题严判；
-            # 其他填空/简答完全一致判对，不一致不轻易判错（手写转写有误差）
-            sa_s, ca_s = (sa or "").strip(), (ca or "").strip()
-            if sa_s and ca_s and sa_s.lower() == ca_s.lower():
-                q["status"] = "correct"
-            elif sa_s and len(ca_s) == 1 and ca_s.isalpha():
-                q["status"] = "wrong"
-            else:
-                q["status"] = "unknown"
+        _grade_one(q)
 
 
 _TITLE_BAD = ("满分", "考试时间", "考生须知", "注意事项", "本试卷共", "答题卡", "请将", "填涂",
@@ -240,19 +251,10 @@ def _stats(questions: list[dict]) -> dict:
 
 
 def regrade(questions: list[dict]) -> None:
-    """根据 student_answer 与 correct_answer 重新判定 status（用户改答案后调用）。"""
+    """根据 student_answer 与 correct_answer 重新判定 status（用户改答案后调用）。
+    与初判完全同一套规则（_grade_one），避免两条路径判定不一致。"""
     for q in questions:
-        if q.get("status") == "subjective":
-            continue
-        sa, ca = q.get("student_answer"), q.get("correct_answer")
-        if not sa:
-            q["status"] = "unknown"
-        elif ca and str(sa).strip().upper() == str(ca).strip().upper():
-            q["status"] = "correct"
-        elif ca:
-            q["status"] = "wrong"
-        else:
-            q["status"] = "unknown"
+        _grade_one(q)
 
 
 def process_job(job_id: str) -> None:
@@ -285,6 +287,23 @@ def process_job(job_id: str) -> None:
         # 2) 逐页视觉识别（空白页直接跳过；结果缓存，便于重跑与跨作业复用）
         if pages_cache.exists():
             pages = json.loads(pages_cache.read_text(encoding="utf-8"))
+            # 含 error 的占位页是瞬时故障留下的；缺页（失败页不落缓存）同样需要重识
+            have = {p.get("page") for p in pages}
+            err_pages = [p["page"] for p in pages if p.get("error")]
+            err_pages += [i for i in range(1, len(imgs) + 1) if i not in have]
+            if err_pages:
+                payload = []
+                for i in err_pages:
+                    if 1 <= i <= len(imgs):
+                        payload.append((i, pdf_utils.image_to_data_url(imgs[i - 1])))
+                if payload:
+                    _set_progress(job_id, "vision", 0, len(payload), "正在重试识别失败的页面…")
+                    by_page = {p["page"]: p for p in pages}
+                    for r in llm.vision_extract_pages(payload):
+                        by_page[r["page"]] = r
+                    pages = [by_page[i] for i in sorted(by_page)]
+                    store.write_json_atomic(pages_cache,
+                                            [p for p in pages if not p.get("error")], indent=2)
         else:
             by_idx: dict[int, dict] = {}
             payload = []
@@ -303,16 +322,17 @@ def process_job(job_id: str) -> None:
             for r in llm.vision_extract_pages(payload, on_progress=prog):
                 by_idx[r["page"]] = r
             pages = [by_idx[i] for i in sorted(by_idx)]
-            pages_cache.write_text(json.dumps(pages, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.write_json_atomic(pages_cache,
+                                    [p for p in pages if not p.get("error")], indent=2)
 
         # 3) 汇总 + 判分（代码合并各页结果，稳健可控）
         _set_progress(job_id, "consolidate", 0, 1, "正在汇总题目并对照答案判分…")
         questions, answer_key = build_questions(pages)
         meta = build_meta(pages, questions, job.get("filename", ""))
-        (jd / "consolidated.json").write_text(
-            json.dumps({"meta": meta, "answer_key": answer_key, "questions": questions},
-                       ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        store.write_json_atomic(
+            jd / "consolidated.json",
+            {"meta": meta, "answer_key": answer_key, "questions": questions},
+            indent=2,
         )
 
         # 4) 判分即完成；错题讲解交给后台队列预生成（用户点开可插队）
@@ -364,6 +384,17 @@ def _render_files(owner_dir, files: list[dict], path_of) -> list[tuple[dict, int
     return plans
 
 
+# 视觉缓存按 (sha, mode) 加进程内锁：两个 worker 处理含相同文件的不同提交时，
+# 串行化读-判-算-写，既防并发写坏缓存，也省双倍 LLM 费用
+_cache_locks: dict[str, threading.Lock] = {}
+_cache_locks_guard = threading.Lock()
+
+
+def _cache_lock_for(key: str) -> threading.Lock:
+    with _cache_locks_guard:
+        return _cache_locks.setdefault(key, threading.Lock())
+
+
 def _is_blank_entry(p: dict) -> bool:
     return bool(p.get("blank")) or "blank" in (p.get("page_role") or [])
 
@@ -372,40 +403,55 @@ def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
                        mode: str, vision_call, blank_result) -> list[dict]:
     """对一个文件的 n 页做视觉识别，按文件 sha 缓存（页码为文件内局部 1..n）。
 
-    缓存命中时校验其中的"空白页"结论：空白判定阈值修正后，曾被误判跳过的页
-    （如内容稀疏的答案页）会被重新识别并回写缓存，其余页继续复用。
+    缓存校验规则：
+    - "空白页"结论存疑则重识（阈值修正后曾被误判跳过的页可自愈）；
+    - 含 error 的占位条目视同未识别（瞬时故障不得变成永久缓存）；
+    - error 条目永不写回缓存。
     """
     cache = store.vision_cache_path(sha256, mode) if sha256 else None
-    by_idx: dict[int, dict] = {}
-    if cache and cache.exists():
-        cached = json.loads(cache.read_text(encoding="utf-8"))
-        stale = [
-            p["page"] for p in cached
-            if _is_blank_entry(p)
-            and (pages_dir / f"page_{start + p['page']:02d}.jpg").exists()
-            and not pdf_utils.is_blank_page(pages_dir / f"page_{start + p['page']:02d}.jpg")
-        ]
-        if not stale:
-            return cached
-        by_idx = {p["page"]: p for p in cached if p["page"] not in stale}
+    lock = _cache_lock_for(f"{sha256}:{mode}") if sha256 else threading.Lock()
+    with lock:
+        by_idx: dict[int, dict] = {}
+        if cache and cache.exists():
+            try:
+                cached = json.loads(cache.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                cached = None  # 缓存损坏：整体重识并覆写
+            if cached is not None:
+                have = {p["page"] for p in cached if isinstance(p.get("page"), int)}
+                stale = [
+                    p["page"] for p in cached
+                    if p.get("error")
+                    or (
+                        _is_blank_entry(p)
+                        and (pages_dir / f"page_{start + p['page']:02d}.jpg").exists()
+                        and not pdf_utils.is_blank_page(pages_dir / f"page_{start + p['page']:02d}.jpg")
+                    )
+                ]
+                # error 条目不落缓存 → 对应页在缓存里整个缺失，也要重识
+                missing = [li for li in range(1, n + 1) if li not in have]
+                if not stale and not missing:
+                    return cached
+                by_idx = {p["page"]: p for p in cached if p["page"] not in stale}
 
-    payload = []
-    for li in range(1, n + 1):
-        if li in by_idx:
-            continue
-        img = pages_dir / f"page_{start + li:02d}.jpg"
-        if pdf_utils.is_blank_page(img):
-            r = blank_result(li)
-            r["blank"] = True
-            by_idx[li] = r
-        else:
-            payload.append((li, pdf_utils.image_to_data_url(img)))
-    for r in vision_call(payload):
-        by_idx[r["page"]] = r
-    results = [by_idx[i] for i in sorted(by_idx)]
-    if cache:
-        cache.write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
-    return results
+        payload = []
+        for li in range(1, n + 1):
+            if li in by_idx:
+                continue
+            img = pages_dir / f"page_{start + li:02d}.jpg"
+            if pdf_utils.is_blank_page(img):
+                r = blank_result(li)
+                r["blank"] = True
+                by_idx[li] = r
+            else:
+                payload.append((li, pdf_utils.image_to_data_url(img)))
+        for r in vision_call(payload):
+            by_idx[r["page"]] = r
+        results = [by_idx[i] for i in sorted(by_idx)]
+        if cache:
+            # error 占位不入缓存：下次处理自动重试失败页
+            store.write_json_atomic(cache, [p for p in results if not p.get("error")])
+        return results
 
 
 def _set_paper_progress(paper_id: str, stage: str, done: int, total: int, label: str) -> None:
@@ -465,16 +511,19 @@ def process_paper(paper_id: str) -> None:
                 # 归一化失败退回原始题号：宁可部分题缺答案，也不张冠李戴
                 pass
         # 归一化之后落盘：提交"学生答在试卷上"的零成本路径靠这份数据按全卷题号取手写答案
-        (pd / "pages_raw.json").write_text(
-            json.dumps(all_pages, ensure_ascii=False, indent=2), encoding="utf-8")
+        store.write_json_atomic(pd / "pages_raw.json", all_pages, indent=2)
         questions = build_paper_questions(all_pages)
 
-        # 补传答案/重新识别时，保留老师手工核对过的答案与已有考点
+        # 补传答案/重新识别时，保留老师手工核对过的答案与已有考点：
+        # edited=1（手工录入/改判过）的题以人工值为准，视觉输出不得覆盖
         old = {q["id"]: q for q in store.get_paper_questions(paper_id)}
         for q in questions:
             o = old.get(q["id"])
             if o:
-                if not q.get("correct_answer") and o.get("correct_answer"):
+                if o.get("edited") and o.get("correct_answer") is not None:
+                    q["correct_answer"] = o["correct_answer"]
+                    q["edited"] = True
+                elif not q.get("correct_answer") and o.get("correct_answer"):
                     q["correct_answer"] = o["correct_answer"]
                 if o.get("knowledge_point"):
                     q["knowledge_point"] = o["knowledge_point"]
@@ -600,6 +649,8 @@ def process_submission(job_id: str) -> None:
             done_pages += n
 
         _set_progress(job_id, "consolidate", 0, 1, "正在对照标准答案判分…")
+        # 判分前重读试卷题目：老师可能在处理期间刚改过标准答案，以最新值为准
+        paper_qs = store.get_paper_questions(job["paper_id"])
         questions = grade_submission_questions(paper_qs, {k: v[0] for k, v in answers.items()})
 
         # 低置信度识别（涂改、字迹模糊）不可信：即便恰好与标准答案一致也不判对，

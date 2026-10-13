@@ -95,7 +95,7 @@ export function JobPage() {
     )
 
   const job = jobQ.data
-  const title = job.meta?.title || job.filename || '试卷'
+  const title = job.paper_title || job.meta?.title || job.filename || '试卷'
 
   if (job.status === 'processing') {
     return (

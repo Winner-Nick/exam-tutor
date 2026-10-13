@@ -146,6 +146,9 @@ class SecurityHeadersMiddleware:
                 headers["X-Content-Type-Options"] = "nosniff"
                 headers["X-Frame-Options"] = "DENY"
                 headers["Referrer-Policy"] = "same-origin"
+                # HTTPS 部署（COOKIE_SECURE=1 即反代终止 TLS）时声明 HSTS
+                if settings.cookie_secure:
+                    headers["Strict-Transport-Security"] = "max-age=31536000"
                 if headers.get("content-type", "").startswith("text/html"):
                     headers["Content-Security-Policy"] = (
                         "default-src 'self'; img-src 'self' data:; "

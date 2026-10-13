@@ -1,6 +1,8 @@
 """学生管理：老师账号下的学生增删改查（"我自己"自动创建、不可删）。"""
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import auth, store
@@ -44,5 +46,9 @@ def delete_student(student: dict = Depends(auth.get_owned_student)):
         raise HTTPException(400, "不能删除“我自己”")
     if store.count_student_submissions(student["id"]):
         raise HTTPException(409, "该学生名下已有批改记录，请先删除对应记录")
-    store.delete_student(student["id"])
+    try:
+        store.delete_student(student["id"])
+    except sqlite3.IntegrityError:
+        # 检查与删除之间恰好产生了新提交
+        raise HTTPException(409, "该学生名下已有批改记录，请先删除对应记录") from None
     return {"ok": True}

@@ -16,6 +16,7 @@ def override_answer(qid: str, req: OverrideRequest, job: dict = Depends(auth.get
     if not q:
         raise HTTPException(404, "题目不存在")
 
+    old_answer = q.get("student_answer")
     allowed = {"correct", "wrong", "unknown", "subjective"}
     if req.status in allowed:
         q["status"] = req.status
@@ -25,13 +26,19 @@ def override_answer(qid: str, req: OverrideRequest, job: dict = Depends(auth.get
         q["student_answer"] = (req.student_answer or "").strip() or None
         pipeline.regrade([q])
 
-    store.update_question(
-        job_id, qid, student_answer=q.get("student_answer"), status=q["status"],
-        overridden=1,  # 人工修正：补拍重跑时保留，不被自动识别覆盖
-    )
+    fields: dict = {
+        "student_answer": q.get("student_answer"),
+        "status": q["status"],
+        "overridden": 1,  # 人工修正：补拍重跑时保留，不被自动识别覆盖
+    }
+    # 答案变了，旧讲解（针对旧答案生成）作废，重新排队生成
+    if q.get("student_answer") != old_answer and q.get("explanation"):
+        fields["explanation"] = None
+        fields["explain_state"] = "none"
+    store.update_question(job_id, qid, **fields)
 
     # 改后变成错题且尚无讲解 -> 高优先级入队（SSE question_explained 通知就绪）
-    if q["status"] in ("wrong", "unknown") and not q.get("explanation"):
+    if q["status"] in ("wrong", "unknown") and not store.get_question(job_id, qid).get("explanation"):
         workers.enqueue_explanations(job_id, [qid], priority=0)
 
     stats = store.refresh_stats(job_id)
