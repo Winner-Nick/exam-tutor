@@ -11,11 +11,12 @@ const FILTERS: { key: Filter; label: string }[] = [
 
 const DOT_CLS: Record<Question['status'], string> = {
   correct:
-    'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/50 dark:text-emerald-300',
-  wrong: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/50 dark:text-rose-300',
-  unknown: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/50 dark:text-amber-300',
+    'bg-emerald-100/80 text-emerald-700 hover:bg-emerald-200/80 dark:bg-emerald-900/40 dark:text-emerald-300',
+  wrong: 'bg-rose-100/80 text-rose-700 hover:bg-rose-200/80 dark:bg-rose-900/40 dark:text-rose-300',
+  unknown:
+    'bg-amber-100/80 text-amber-700 hover:bg-amber-200/80 dark:bg-amber-900/40 dark:text-amber-300',
   subjective:
-    'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/50 dark:text-violet-300',
+    'bg-violet-100/80 text-violet-700 hover:bg-violet-200/80 dark:bg-violet-900/40 dark:text-violet-300',
 }
 
 export function QuestionGrid({ questions }: { questions: Question[] }) {
@@ -38,9 +39,7 @@ export function QuestionGrid({ questions }: { questions: Question[] }) {
             key={f.key}
             onClick={() => setFilter(f.key)}
             className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
-              filter === f.key
-                ? 'bg-primary-600 text-white'
-                : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400'
+              filter === f.key ? 'chip chip-active' : 'chip'
             }`}
           >
             {f.label} {counts[f.key]}
@@ -57,8 +56,8 @@ export function QuestionGrid({ questions }: { questions: Question[] }) {
               setMobileTab('detail')
             }}
             title={`第 ${q.number} 题`}
-            className={`relative flex h-9 items-center justify-center rounded-lg text-xs font-semibold transition-all ${DOT_CLS[q.status]} ${
-              selectedQid === q.id ? 'ring-2 ring-primary-500 ring-offset-1 dark:ring-offset-slate-900' : ''
+            className={`relative flex h-9 items-center justify-center rounded-lg font-serif text-xs font-semibold transition-all ${DOT_CLS[q.status]} ${
+              selectedQid === q.id ? 'ring-2 ring-primary-500 ring-offset-1 ring-offset-surface' : ''
             }`}
           >
             {q.number}
@@ -68,7 +67,7 @@ export function QuestionGrid({ questions }: { questions: Question[] }) {
           </button>
         ))}
         {visible.length === 0 && (
-          <p className="col-span-full py-6 text-center text-xs text-slate-400">该分类下没有题目</p>
+          <p className="col-span-full py-6 text-center text-xs text-dim">该分类下没有题目</p>
         )}
       </div>
     </div>

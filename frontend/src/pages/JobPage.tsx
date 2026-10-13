@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api, ApiError, pageImageUrl } from '../api'
 import { ChatPanel } from '../components/ChatPanel'
 import { DonutChart } from '../components/DonutChart'
+import { Icon } from '../components/Icon'
 import { PaperViewer } from '../components/PaperViewer'
 import { QuestionDetail } from '../components/QuestionDetail'
 import { QuestionGrid } from '../components/QuestionGrid'
@@ -18,14 +19,22 @@ import type { Job } from '../types'
 function StatsBar({ job }: { job: Job }) {
   const s = job.stats
   const graded = (s.correct ?? 0) + (s.wrong ?? 0)
+  const items = [
+    { label: '答对', value: s.correct ?? 0, cls: 'text-emerald-600 dark:text-emerald-400' },
+    { label: '答错', value: s.wrong ?? 0, cls: 'text-rose-600 dark:text-rose-400' },
+    { label: '待确认', value: s.unknown ?? 0, cls: 'text-amber-600 dark:text-amber-400' },
+    { label: '主观题', value: s.subjective ?? 0, cls: 'text-violet-600 dark:text-violet-400' },
+  ]
   return (
-    <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+    <div className="card flex items-center gap-4 p-4 sm:gap-6 sm:px-6">
       <DonutChart correct={s.correct ?? 0} total={graded} size={72} />
-      <div className="grid flex-1 grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
-        <span>✅ 答对 <b className="text-emerald-600">{s.correct ?? 0}</b></span>
-        <span>❌ 答错 <b className="text-rose-600">{s.wrong ?? 0}</b></span>
-        <span>❓ 待确认 <b className="text-amber-600">{s.unknown ?? 0}</b></span>
-        <span>📝 主观题 <b className="text-violet-600">{s.subjective ?? 0}</b></span>
+      <div className="grid flex-1 grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+        {items.map((it) => (
+          <div key={it.label} className="text-center sm:text-left">
+            <p className={`font-serif text-xl font-bold ${it.cls}`}>{it.value}</p>
+            <p className="text-xs text-dim">{it.label}</p>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -77,10 +86,10 @@ export function JobPage() {
     )
   if (jobQ.isError)
     return (
-      <div className="py-20 text-center text-slate-400">
+      <div className="py-20 text-center text-dim">
         <p>作业不存在或已被删除</p>
-        <Link to="/" className="mt-2 inline-block text-primary-600">
-          返回试卷列表
+        <Link to="/" className="mt-2 inline-block text-primary-600 dark:text-primary-400">
+          返回批改列表
         </Link>
       </div>
     )
@@ -91,9 +100,9 @@ export function JobPage() {
   if (job.status === 'processing') {
     return (
       <div className="py-16">
-        <h2 className="mb-10 text-center text-lg font-bold">{title}</h2>
+        <h2 className="mb-10 text-center font-serif text-xl font-bold">{title}</h2>
         <StageStepper job={job} />
-        <p className="mt-8 text-center text-xs text-slate-400">
+        <p className="mt-8 text-center text-xs text-dim">
           判分完成后立即可看结果，错题讲解会在后台陆续生成
         </p>
       </div>
@@ -103,19 +112,19 @@ export function JobPage() {
   if (job.status === 'error') {
     return (
       <div className="py-20 text-center">
-        <p className="text-3xl">😵</p>
+        <Icon name="alert" size={40} className="mx-auto text-rose-400" />
         <p className="mt-3 font-medium">处理失败</p>
-        <p className="mt-1 text-sm text-slate-400">{job.error}</p>
+        <p className="mt-1 text-sm text-dim">{job.error}</p>
         <div className="mt-4 flex justify-center gap-3 text-sm">
           {job.kind === 'submission' && (
-            <label className="cursor-pointer rounded-xl bg-primary-600 px-4 py-2 font-medium text-white hover:bg-primary-700">
+            <label className="btn-primary cursor-pointer px-4 py-2">
               {addFiles.isPending
                 ? uploadPct != null && uploadPct < 100
-                  ? `⬆️ 上传 ${uploadPct}%`
+                  ? `上传 ${uploadPct}%`
                   : '上传中…'
                 : picking
-                  ? '⏳ 正在处理照片…'
-                  : '📷 重新拍照上传'}
+                  ? '正在处理照片…'
+                  : '重新拍照上传'}
               <input
                 type="file"
                 multiple
@@ -135,7 +144,7 @@ export function JobPage() {
               />
             </label>
           )}
-          <Link to="/" className="self-center text-primary-600">
+          <Link to="/" className="btn-outline self-center px-4 py-2">
             返回首页
           </Link>
         </div>
@@ -157,10 +166,10 @@ export function JobPage() {
         }`}
       >
         <div className="min-w-0">
-          <h2 className="truncate text-lg font-bold">{title}</h2>
+          <h2 className="truncate font-serif text-xl font-bold">{title}</h2>
           {job.student_name && (
-            <p className="text-xs text-slate-400">
-              👤 {job.student_name}
+            <p className="mt-0.5 flex items-center gap-1 text-xs text-dim">
+              <Icon name="user" size={12} /> {job.student_name}
               {job.paper_id && (
                 <>
                   {' · '}
@@ -178,22 +187,25 @@ export function JobPage() {
               onClick={() => moreFilesRef.current?.click()}
               disabled={addFiles.isPending || picking}
               title="还有没拍的页面？继续拍照补传，已识别的部分不会丢"
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
+              className="btn-outline px-3 py-1.5"
             >
-              {addFiles.isPending
-                ? uploadPct != null && uploadPct < 100
-                  ? `⬆️ 上传 ${uploadPct}%`
-                  : '上传中…'
-                : picking
-                  ? '⏳ 正在处理照片…'
-                  : '📷 补拍补传'}
+              {addFiles.isPending ? (
+                uploadPct != null && uploadPct < 100 ? (
+                  `上传 ${uploadPct}%`
+                ) : (
+                  '上传中…'
+                )
+              ) : picking ? (
+                '正在处理照片…'
+              ) : (
+                <>
+                  <Icon name="camera" size={15} /> 补拍补传
+                </>
+              )}
             </button>
           )}
-          <button
-            onClick={() => setShowPaper(true)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
-          >
-            📖 查看原卷
+          <button onClick={() => setShowPaper(true)} className="btn-outline px-3 py-1.5">
+            <Icon name="book-open" size={15} /> 查看原卷
           </button>
         </div>
       </div>
@@ -223,31 +235,26 @@ export function JobPage() {
 
       {/* 桌面三栏 / 移动单栏 + 底部 Tab */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
-        <section
-          className={`rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 ${
-            mobileTab !== 'questions' ? 'hidden lg:block' : ''
-          }`}
-        >
+        <section className={`card p-4 ${mobileTab !== 'questions' ? 'hidden lg:block' : ''}`}>
           <QuestionGrid questions={questions} />
         </section>
 
-        <section
-          className={`rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 ${
-            mobileTab !== 'detail' ? 'hidden lg:block' : ''
-          }`}
-        >
+        <section className={`card p-5 ${mobileTab !== 'detail' ? 'hidden lg:block' : ''}`}>
           {selected ? (
             <QuestionDetail job={job} question={selected} />
           ) : (
-            <p className="py-16 text-center text-sm text-slate-400">
-              <span className="lg:hidden">在「题目」中点击题号，查看该题详情与讲解</span>
-              <span className="hidden lg:inline">从左侧选择一道题查看详情与讲解</span>
-            </p>
+            <div className="py-16 text-center">
+              <Icon name="grid" size={28} className="mx-auto text-dim" />
+              <p className="mt-3 text-sm text-dim">
+                <span className="lg:hidden">在「题目」中点击题号，查看该题详情与讲解</span>
+                <span className="hidden lg:inline">从左侧选择一道题查看详情与讲解</span>
+              </p>
+            </div>
           )}
         </section>
 
         <section
-          className={`rounded-2xl border border-slate-200 bg-white p-4 lg:h-[640px] dark:border-slate-800 dark:bg-slate-900 ${
+          className={`card p-4 lg:h-[640px] ${
             mobileTab !== 'chat'
               ? 'hidden lg:block'
               : 'h-[calc(100dvh-10.5rem)] min-h-[320px]'
@@ -258,22 +265,22 @@ export function JobPage() {
       </div>
 
       {/* 移动端底部 Tab（pb 适配 iPhone Home 指示条安全区） */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-line bg-paper/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
         {(
           [
-            { k: 'questions', label: '题目', icon: '🔢' },
-            { k: 'detail', label: '详情', icon: '📋' },
-            { k: 'chat', label: '答疑', icon: '💬' },
+            { k: 'questions', label: '题目', icon: 'grid' },
+            { k: 'detail', label: '详情', icon: 'file-text' },
+            { k: 'chat', label: '答疑', icon: 'chat' },
           ] as const
         ).map((t) => (
           <button
             key={t.k}
             onClick={() => setMobileTab(t.k)}
-            className={`flex flex-col items-center gap-0.5 py-2 text-xs ${
-              mobileTab === t.k ? 'font-semibold text-primary-600' : 'text-slate-400'
+            className={`flex flex-col items-center gap-0.5 py-2 text-xs transition-colors ${
+              mobileTab === t.k ? 'font-semibold text-primary-600 dark:text-primary-400' : 'text-dim'
             }`}
           >
-            <span>{t.icon}</span>
+            <Icon name={t.icon} size={19} />
             {t.label}
           </button>
         ))}

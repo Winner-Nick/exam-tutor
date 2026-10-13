@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react'
+import { Icon } from './Icon'
 
 interface ToastItem {
   id: number
@@ -29,10 +30,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map((t) => (
           <div
             key={t.id}
-            className={`fade-up rounded-xl px-4 py-2 text-sm font-medium text-white shadow-lg ${
-              t.kind === 'error' ? 'bg-rose-600' : 'bg-slate-800 dark:bg-slate-700'
+            className={`pop-in flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white shadow-lg ${
+              t.kind === 'error' ? 'bg-rose-600' : 'bg-stone-800 dark:bg-stone-700'
             }`}
           >
+            <Icon name={t.kind === 'error' ? 'alert' : 'check'} size={15} />
             {t.text}
           </div>
         ))}

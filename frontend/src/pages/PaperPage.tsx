@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError, paperPageImageUrl } from '../api'
+import { Icon } from '../components/Icon'
 import { PaperViewer } from '../components/PaperViewer'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
@@ -30,11 +31,11 @@ function AnswerCell({ paper, q }: { paper: Paper; q: PaperQuestion }) {
       onBlur={() => dirty && save.mutate()}
       onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
       placeholder="—"
-      className={`w-full min-w-16 rounded-lg border px-2 py-1 text-sm ${
+      className={`w-full min-w-16 rounded-lg border px-2 py-1 text-sm transition-colors outline-none focus:border-primary-400 ${
         q.correct_answer
-          ? 'border-slate-200 dark:border-slate-700'
+          ? 'border-line bg-surface'
           : 'border-amber-300 bg-amber-50/50 dark:border-amber-700 dark:bg-amber-900/20'
-      } dark:bg-slate-800`}
+      }`}
     />
   )
 }
@@ -58,7 +59,7 @@ function AddQuestionRow({ paperId }: { paperId: string }) {
 
   return (
     <form
-      className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2.5 dark:border-slate-800"
+      className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2.5"
       onSubmit={(e) => {
         e.preventDefault()
         if (number.trim()) add.mutate()
@@ -69,23 +70,23 @@ function AddQuestionRow({ paperId }: { paperId: string }) {
         onChange={(e) => setNumber(e.target.value)}
         placeholder="题号"
         maxLength={10}
-        className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-800"
+        className="input w-16 px-2 py-1"
       />
       <input
         value={answer}
         onChange={(e) => setAnswer(e.target.value)}
         placeholder="标准答案"
         maxLength={100}
-        className="w-36 rounded-lg border border-slate-200 px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-800"
+        className="input w-36 px-2 py-1"
       />
       <button
         type="submit"
         disabled={!number.trim() || add.isPending}
-        className="rounded-lg bg-slate-100 px-3 py-1 text-sm font-medium hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800"
+        className="btn-outline rounded-lg px-3 py-1 text-sm"
       >
-        ＋ 添加题目
+        <Icon name="plus" size={14} /> 添加题目
       </button>
-      <span className="text-xs text-slate-400">识别漏了题，或只有答案没有卷子时手动录入</span>
+      <span className="text-xs text-dim">识别漏了题，或只有答案没有卷子时手动录入</span>
     </form>
   )
 }
@@ -149,9 +150,9 @@ export function PaperPage() {
     )
   if (paperQ.isError)
     return (
-      <div className="py-20 text-center text-slate-400">
+      <div className="py-20 text-center text-dim">
         <p>试卷不存在或已被删除</p>
-        <Link to="/papers" className="mt-2 inline-block text-primary-600">
+        <Link to="/papers" className="mt-2 inline-block text-primary-600 dark:text-primary-400">
           返回试卷库
         </Link>
       </div>
@@ -166,7 +167,7 @@ export function PaperPage() {
       <div className="py-16 text-center">
         <Spinner className="mx-auto h-8 w-8" />
         <p className="mt-4 font-medium">{paper.progress?.label || '正在识别试卷…'}</p>
-        <p className="mt-2 text-xs text-slate-400">识别完成后请核对标准答案，再开始批改</p>
+        <p className="mt-2 text-xs text-dim">识别完成后请核对标准答案，再开始批改</p>
       </div>
     )
   }
@@ -174,13 +175,10 @@ export function PaperPage() {
   if (paper.status === 'error') {
     return (
       <div className="py-20 text-center">
-        <p className="text-3xl">😵</p>
+        <Icon name="alert" size={40} className="mx-auto text-rose-400" />
         <p className="mt-3 font-medium">识别失败</p>
-        <p className="mt-1 text-sm text-slate-400">{paper.error}</p>
-        <button
-          onClick={() => reprocess.mutate()}
-          className="mt-4 rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white"
-        >
+        <p className="mt-1 text-sm text-dim">{paper.error}</p>
+        <button onClick={() => reprocess.mutate()} className="btn-primary mt-4 px-4 py-2 text-sm">
           重新识别
         </button>
       </div>
@@ -204,59 +202,56 @@ export function PaperPage() {
                 onChange={(e) => setEditingTitle(e.target.value)}
                 autoFocus
                 maxLength={80}
-                className="w-full max-w-sm rounded-lg border border-slate-300 px-2 py-1 text-base font-bold dark:border-slate-700 dark:bg-slate-800"
+                className="input w-full max-w-sm px-2 py-1 text-base font-bold"
               />
-              <button type="submit" disabled={rename.isPending} className="shrink-0 text-sm text-primary-600">
+              <button type="submit" disabled={rename.isPending} className="shrink-0 text-sm text-primary-600 dark:text-primary-400">
                 保存
               </button>
-              <button type="button" onClick={() => setEditingTitle(null)} className="shrink-0 text-sm text-slate-400">
+              <button type="button" onClick={() => setEditingTitle(null)} className="shrink-0 text-sm text-dim">
                 取消
               </button>
             </form>
           ) : (
-            <h2 className="flex items-center gap-1.5 text-lg font-bold">
+            <h2 className="flex items-center gap-1.5 font-serif text-xl font-bold">
               <span className="truncate">{paper.title || '试卷'}</span>
               <button
                 onClick={() => setEditingTitle(paper.title || '')}
                 title="修改试卷名称"
-                className="shrink-0 rounded p-0.5 text-sm text-slate-300 hover:text-slate-500"
+                className="icon-btn shrink-0 p-1"
               >
-                ✏️
+                <Icon name="edit" size={15} />
               </button>
             </h2>
           )}
-          <p className="text-xs text-slate-400">
+          <p className="mt-0.5 text-xs text-dim">
             {paper.page_count ? `${paper.page_count} 页 · ` : ''}{questions.length} 题
             {paper.submission_count > 0 && ` · 已批改 ${paper.submission_count} 次`}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {!!paper.page_count && (
-            <button
-              onClick={() => setShowPages(true)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900"
-            >
-              📖 查看原卷
+            <button onClick={() => setShowPages(true)} className="btn-outline px-3 py-1.5">
+              <Icon name="book-open" size={15} /> 查看原卷
             </button>
           )}
           <button
             onClick={() => answersRef.current?.click()}
             disabled={addAnswers.isPending || picking}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-primary-300 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
+            className="btn-outline px-3 py-1.5"
           >
             {addAnswers.isPending
               ? uploadPct != null && uploadPct < 100
-                ? `⬆️ 上传 ${uploadPct}%`
+                ? `上传 ${uploadPct}%`
                 : '上传中…'
               : picking
-                ? '⏳ 正在处理照片…'
-                : '📎 补传答案文件'}
+                ? '正在处理照片…'
+                : '补传答案文件'}
           </button>
           <button
             onClick={() => navigate(`/?paper=${paper.id}`)}
-            className="rounded-xl bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700"
+            className="btn-primary px-3 py-1.5"
           >
-            ✏️ 去批改
+            <Icon name="pen" size={15} /> 去批改
           </button>
         </div>
       </div>
@@ -281,33 +276,36 @@ export function PaperPage() {
       />
 
       {missing > 0 && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
-          ⚠️ 有 <b>{missing}</b> 题缺少标准答案：可「补传答案文件」（参考答案在另一份 PDF/照片里），或在下表中手动填写。缺答案的题批改时会标为"待确认"。
+        <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-200">
+          <Icon name="alert" size={17} className="mt-0.5 shrink-0" />
+          <p>
+            有 <b>{missing}</b> 题缺少标准答案：可「补传答案文件」（参考答案在另一份 PDF/照片里），或在下表中手动填写。缺答案的题批改时会标为"待确认"。
+          </p>
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <div className="card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-100 text-left text-xs text-slate-400 dark:border-slate-800">
-              <th className="px-3 py-2 font-medium">题号</th>
-              <th className="px-3 py-2 font-medium">题型</th>
-              <th className="hidden px-3 py-2 font-medium sm:table-cell">题干</th>
-              <th className="w-32 px-3 py-2 font-medium">标准答案</th>
-              <th className="w-8 px-1 py-2"></th>
+            <tr className="border-b border-line text-left text-xs text-dim">
+              <th className="px-3 py-2.5 font-medium">题号</th>
+              <th className="px-3 py-2.5 font-medium">题型</th>
+              <th className="hidden px-3 py-2.5 font-medium sm:table-cell">题干</th>
+              <th className="w-32 px-3 py-2.5 font-medium">标准答案</th>
+              <th className="w-8 px-1 py-2.5"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+          <tbody className="divide-y divide-line/60">
             {questions.map((q) => (
-              <tr key={q.id}>
-                <td className="px-3 py-2 font-semibold whitespace-nowrap">{q.number}</td>
-                <td className="px-3 py-2 text-xs whitespace-nowrap text-slate-400">
+              <tr key={q.id} className="transition-colors hover:bg-surface-2/50">
+                <td className="px-3 py-2 font-serif font-semibold whitespace-nowrap">{q.number}</td>
+                <td className="px-3 py-2 text-xs whitespace-nowrap text-dim">
                   {q.type || q.section || '—'}
                 </td>
-                <td className="hidden max-w-md truncate px-3 py-2 text-slate-500 sm:table-cell dark:text-slate-400" title={q.stem ?? undefined}>
+                <td className="hidden max-w-md truncate px-3 py-2 text-ink2" title={q.stem ?? undefined}>
                   {q.stem}
                   {q.options && (
-                    <span className="text-slate-400">
+                    <span className="text-dim">
                       {' '}
                       {Object.entries(q.options).map(([k, v]) => `${k}.${v}`).join(' ')}
                     </span>
@@ -322,9 +320,9 @@ export function PaperPage() {
                       if (confirm(`确定删除第 ${q.number} 题吗？`)) delQuestion.mutate(q.id)
                     }}
                     title="删除此题"
-                    className="rounded p-1 text-slate-200 hover:text-rose-500 dark:text-slate-700 dark:hover:text-rose-400"
+                    className="rounded p-1 text-dim/60 transition-colors hover:text-rose-500"
                   >
-                    ✕
+                    <Icon name="x" size={14} />
                   </button>
                 </td>
               </tr>
@@ -332,11 +330,11 @@ export function PaperPage() {
           </tbody>
         </table>
         {questions.length === 0 && (
-          <p className="py-8 text-center text-sm text-slate-400">
+          <p className="py-8 text-center text-sm text-dim">
             {paper.files && paper.files.length > 0 ? (
               <>
                 没有识别到题目，请检查上传的文件或
-                <button onClick={() => reprocess.mutate()} className="mx-1 text-primary-600">
+                <button onClick={() => reprocess.mutate()} className="mx-1 text-primary-600 dark:text-primary-400">
                   重新识别
                 </button>
                 ，也可以在下方手动录入
@@ -349,8 +347,9 @@ export function PaperPage() {
         <AddQuestionRow paperId={paper.id} />
       </div>
 
-      <p className="text-xs text-slate-400">
-        💡 修改标准答案会自动重判这份试卷下所有已批改的作答。
+      <p className="flex items-center gap-1.5 text-xs text-dim">
+        <Icon name="lightbulb" size={13} />
+        修改标准答案会自动重判这份试卷下所有已批改的作答。
       </p>
 
       {showPages && !!paper.page_count && (

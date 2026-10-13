@@ -2,17 +2,26 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { Icon, type IconName } from '../components/Icon'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
 import type { Feedback, Invite, User } from '../types'
 
-const inputCls =
-  'w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-primary-400 dark:border-slate-700 dark:bg-slate-800'
-
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
+function Card({
+  title,
+  icon,
+  children,
+}: {
+  title: string
+  icon: IconName
+  children: React.ReactNode
+}) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-      <h3 className="mb-3 font-bold">{title}</h3>
+    <div className="card p-5">
+      <h3 className="section-title mb-3 flex items-center gap-2 text-base">
+        <Icon name={icon} size={17} className="text-primary-600 dark:text-primary-400" />
+        {title}
+      </h3>
       {children}
     </div>
   )
@@ -25,7 +34,7 @@ const INVITE_STATUS: Record<Invite['status'], { label: string; cls: string }> = 
   },
   used_up: {
     label: '已用完',
-    cls: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
+    cls: 'bg-surface-2 text-dim',
   },
   expired: {
     label: '已过期',
@@ -67,30 +76,31 @@ function InviteManager() {
     )
   }
 
-  const selectCls =
-    'rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none dark:border-slate-700 dark:bg-slate-800'
-
   return (
-    <Card title="邀请家人 / 同学">
-      <p className="mb-3 text-sm text-slate-500 dark:text-slate-400">
+    <Card title="邀请家人 / 同学" icon="users">
+      <p className="mb-3 text-sm text-ink2">
         生成邀请码发给对方，注册时填写。可随时撤销未用完的码。
       </p>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400">
+        <label className="flex items-center gap-1.5 text-sm text-ink2">
           可用次数
-          <select value={maxUses} onChange={(e) => setMaxUses(Number(e.target.value))} className={selectCls}>
+          <select
+            value={maxUses}
+            onChange={(e) => setMaxUses(Number(e.target.value))}
+            className="input w-auto px-2 py-1.5"
+          >
             {[1, 2, 5, 10].map((n) => (
               <option key={n} value={n}>{n} 次</option>
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400">
+        <label className="flex items-center gap-1.5 text-sm text-ink2">
           有效期
           <select
             value={ttlDays ?? 'forever'}
             onChange={(e) => setTtlDays(e.target.value === 'forever' ? null : Number(e.target.value))}
-            className={selectCls}
+            className="input w-auto px-2 py-1.5"
           >
             <option value={1}>1 天</option>
             <option value={7}>7 天</option>
@@ -101,7 +111,7 @@ function InviteManager() {
         <button
           onClick={() => create.mutate()}
           disabled={create.isPending}
-          className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+          className="btn-primary px-4 py-2 text-sm"
         >
           {create.isPending ? '生成中…' : '生成邀请码'}
         </button>
@@ -112,11 +122,11 @@ function InviteManager() {
           <Spinner />
         </div>
       ) : invites.isError ? (
-        <p className="py-4 text-center text-sm text-slate-400">列表加载失败</p>
+        <p className="py-4 text-center text-sm text-dim">列表加载失败</p>
       ) : invites.data.invites.length === 0 ? (
-        <p className="py-4 text-center text-sm text-slate-400">还没有邀请码</p>
+        <p className="py-4 text-center text-sm text-dim">还没有邀请码</p>
       ) : (
-        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+        <ul className="divide-y divide-line/60">
           {invites.data.invites.map((inv) => {
             const st = INVITE_STATUS[inv.status]
             return (
@@ -124,14 +134,12 @@ function InviteManager() {
                 <button
                   onClick={() => copy(inv.code)}
                   title="点击复制"
-                  className="rounded-lg bg-slate-100 px-2 py-1 font-mono text-sm hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700"
+                  className="rounded-lg bg-surface-2 px-2.5 py-1 font-mono text-sm transition-colors hover:bg-line"
                 >
                   {inv.code}
                 </button>
-                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${st.cls}`}>
-                  {st.label}
-                </span>
-                <span className="text-xs text-slate-400">
+                <span className={`badge ${st.cls}`}>{st.label}</span>
+                <span className="text-xs text-dim">
                   已用 {inv.used_count}/{inv.max_uses}
                   {' · '}
                   {inv.expires_at
@@ -146,7 +154,7 @@ function InviteManager() {
                         revoke.mutate(inv.code)
                       }
                     }}
-                    className="rounded-lg px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30"
+                    className="rounded-lg px-2 py-1 text-xs text-rose-500 transition-colors hover:bg-rose-50 dark:hover:bg-rose-900/30"
                   >
                     撤销
                   </button>
@@ -166,17 +174,17 @@ function FeedbackItem({ fb, onDelete }: { fb: Feedback; onDelete: () => void }) 
   const errors = d.errors ?? []
   return (
     <li className="py-3">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-        <span className="font-medium text-slate-600 dark:text-slate-300">{fb.username || '未知用户'}</span>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-dim">
+        <span className="font-medium text-ink2">{fb.username || '未知用户'}</span>
         <span>{new Date(fb.created_at * 1000).toLocaleString('zh-CN')}</span>
-        {fb.page && <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono dark:bg-slate-800">{fb.page}</span>}
+        {fb.page && <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono">{fb.page}</span>}
         {errors.length > 0 && (
-          <span className="rounded-full bg-rose-50 px-2 py-0.5 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300">
+          <span className="badge bg-rose-50 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300">
             {errors.length} 条报错
           </span>
         )}
         <span className="flex-1" />
-        <button onClick={() => setOpen(!open)} className="text-primary-600">
+        <button onClick={() => setOpen(!open)} className="text-primary-600 dark:text-primary-400">
           {open ? '收起' : '设备详情'}
         </button>
         <button
@@ -190,7 +198,7 @@ function FeedbackItem({ fb, onDelete }: { fb: Feedback; onDelete: () => void }) 
       </div>
       {fb.message && <p className="mt-1.5 text-sm whitespace-pre-wrap">{fb.message}</p>}
       {open && (
-        <pre className="thin-scroll mt-2 max-h-64 overflow-auto rounded-xl bg-slate-50 p-3 text-xs leading-relaxed whitespace-pre-wrap text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
+        <pre className="thin-scroll mt-2 max-h-64 overflow-auto rounded-xl bg-surface-2 p-3 text-xs leading-relaxed whitespace-pre-wrap text-ink2">
           {JSON.stringify(d, null, 2)}
         </pre>
       )}
@@ -210,17 +218,17 @@ function FeedbackManager() {
   })
 
   return (
-    <Card title="用户反馈">
+    <Card title="用户反馈" icon="megaphone">
       {q.isPending ? (
         <div className="flex justify-center py-6">
           <Spinner />
         </div>
       ) : q.isError ? (
-        <p className="py-4 text-center text-sm text-slate-400">加载失败</p>
+        <p className="py-4 text-center text-sm text-dim">加载失败</p>
       ) : q.data.feedback.length === 0 ? (
-        <p className="py-4 text-center text-sm text-slate-400">还没有收到反馈</p>
+        <p className="py-4 text-center text-sm text-dim">还没有收到反馈</p>
       ) : (
-        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+        <ul className="divide-y divide-line/60">
           {q.data.feedback.map((fb) => (
             <FeedbackItem key={fb.id} fb={fb} onDelete={() => del.mutate(fb.id)} />
           ))}
@@ -265,24 +273,24 @@ export function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-lg space-y-4">
-      <Card title="账号">
+      <Card title="账号" icon="user">
         <div className="flex items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-sm text-slate-500 dark:text-slate-400">
-            {user.username}（{user.role === 'admin' ? '管理员' : '普通用户'}）
+          <p className="min-w-0 truncate text-sm text-ink2">
+            {user.username}
+            <span className="ml-2 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-dim">
+              {user.role === 'admin' ? '管理员' : '普通用户'}
+            </span>
           </p>
-          <button
-            onClick={logout}
-            className="shrink-0 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-slate-500 hover:border-rose-300 hover:text-rose-500 dark:border-slate-700"
-          >
-            退出登录
+          <button onClick={logout} className="btn-danger shrink-0 px-3 py-1.5 text-sm">
+            <Icon name="logout" size={14} /> 退出登录
           </button>
         </div>
       </Card>
 
-      <Card title="修改密码">
+      <Card title="修改密码" icon="settings">
         <form onSubmit={submitPw} className="space-y-3">
           <input
-            className={inputCls}
+            className="input"
             type="password"
             placeholder="原密码"
             value={oldPw}
@@ -290,7 +298,7 @@ export function SettingsPage() {
             autoComplete="current-password"
           />
           <input
-            className={inputCls}
+            className="input"
             type="password"
             placeholder="新密码（至少 8 位）"
             value={newPw}
@@ -299,7 +307,7 @@ export function SettingsPage() {
           />
           <button
             disabled={!oldPw || !newPw || changePw.isPending}
-            className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+            className="btn-primary px-4 py-2 text-sm"
           >
             保存
           </button>

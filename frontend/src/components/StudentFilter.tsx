@@ -16,7 +16,7 @@ export function StudentFilter({
     <select
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
-      className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+      className="input w-auto cursor-pointer px-3 py-1.5"
     >
       <option value="">全部学生</option>
       {list.map((s) => (

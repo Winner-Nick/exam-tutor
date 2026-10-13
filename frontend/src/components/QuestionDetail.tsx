@@ -43,23 +43,21 @@ export function QuestionDetail({ job, question }: { job: Job; question: Question
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-lg font-bold">第 {question.number} 题</h3>
+        <h3 className="font-serif text-lg font-bold">第 {question.number} 题</h3>
         <StatusBadge status={question.status} />
         {question.section && (
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-dim">
             {question.section}
             {question.type && question.type !== question.section ? ` · ${question.type}` : ''}
           </span>
         )}
         {question.knowledge_point && (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-            {question.knowledge_point}
-          </span>
+          <span className="badge bg-surface-2 text-ink2">{question.knowledge_point}</span>
         )}
       </div>
 
       {question.passage && (
-        <div className="rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800/60">
+        <div className="rounded-xl bg-surface-2 p-3 text-sm">
           <button
             onClick={() => setShowPassage((v) => !v)}
             className="text-xs font-medium text-primary-600 dark:text-primary-400"
@@ -67,9 +65,7 @@ export function QuestionDetail({ job, question }: { job: Job; question: Question
             {showPassage ? '收起原文 ▲' : '展开原文 ▼'}
           </button>
           {showPassage && (
-            <p className="mt-2 leading-relaxed whitespace-pre-wrap text-slate-600 dark:text-slate-300">
-              {question.passage}
-            </p>
+            <p className="mt-2 leading-relaxed whitespace-pre-wrap text-ink2">{question.passage}</p>
           )}
         </div>
       )}
@@ -87,12 +83,12 @@ export function QuestionDetail({ job, question }: { job: Job; question: Question
                 disabled={override.isPending}
                 onClick={() => override.mutate({ student_answer: k })}
                 title="点击把它设为学生的作答"
-                className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left text-sm transition-colors disabled:opacity-60 ${
+                className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left text-sm transition-all disabled:opacity-60 ${
                   isCorrect
                     ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20'
                     : isStudent
                       ? 'border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20'
-                      : 'border-slate-200 bg-white hover:border-primary-300 dark:border-slate-700 dark:bg-slate-900'
+                      : 'border-line bg-surface hover:border-primary-300 dark:hover:border-primary-700'
                 }`}
               >
                 <span
@@ -101,7 +97,7 @@ export function QuestionDetail({ job, question }: { job: Job; question: Question
                       ? 'bg-emerald-500 text-white'
                       : isStudent
                         ? 'bg-rose-500 text-white'
-                        : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300'
+                        : 'bg-surface-2 text-dim'
                   }`}
                 >
                   {k}
@@ -118,13 +114,13 @@ export function QuestionDetail({ job, question }: { job: Job; question: Question
       )}
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-slate-400">人工核对：</span>
+        <span className="text-dim">人工核对：</span>
         {(['correct', 'wrong', 'unknown'] as const).map((st) => (
           <button
             key={st}
             disabled={override.isPending || question.status === st}
             onClick={() => override.mutate({ status: st })}
-            className="rounded-lg border border-slate-200 px-2.5 py-1 font-medium text-slate-500 transition-colors hover:border-primary-300 hover:text-primary-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-400"
+            className="btn-outline rounded-lg px-2.5 py-1 text-xs disabled:opacity-40"
           >
             标为{st === 'correct' ? '答对' : st === 'wrong' ? '答错' : '待确认'}
           </button>

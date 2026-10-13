@@ -24,19 +24,19 @@ export function StageStepper({ job }: { job: Job }) {
             <div key={s.key} className="flex flex-1 items-center last:flex-none">
               <div className="flex flex-col items-center gap-1.5">
                 <div
-                  className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold transition-colors ${
+                  className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold transition-all ${
                     state === 'done'
                       ? 'bg-emerald-500 text-white'
                       : state === 'active'
                         ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/30'
-                        : 'bg-slate-200 text-slate-400 dark:bg-slate-700'
+                        : 'bg-surface-2 text-dim'
                   }`}
                 >
                   {state === 'done' ? '✓' : i + 1}
                 </div>
                 <span
                   className={`text-xs whitespace-nowrap ${
-                    state === 'active' ? 'font-semibold text-primary-600 dark:text-primary-400' : 'text-slate-400'
+                    state === 'active' ? 'font-semibold text-primary-600 dark:text-primary-400' : 'text-dim'
                   }`}
                 >
                   {s.label}
@@ -44,8 +44,8 @@ export function StageStepper({ job }: { job: Job }) {
               </div>
               {i < STAGES.length - 1 && (
                 <div
-                  className={`mx-2 mb-5 h-0.5 flex-1 rounded ${
-                    cur > idx ? 'bg-emerald-400' : 'bg-slate-200 dark:bg-slate-700'
+                  className={`mx-2 mb-5 h-0.5 flex-1 rounded transition-colors ${
+                    cur > idx ? 'bg-emerald-400' : 'bg-line'
                   }`}
                 />
               )}
@@ -55,15 +55,13 @@ export function StageStepper({ job }: { job: Job }) {
       </div>
 
       <div>
-        <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+        <div className="h-2 overflow-hidden rounded-full bg-surface-2">
           <div
             className="h-full rounded-full bg-primary-500 transition-[width] duration-500"
             style={{ width: `${job.stage === 'queued' ? 4 : Math.max(pct, 6)}%` }}
           />
         </div>
-        <p className="mt-2 text-center text-sm text-slate-500 dark:text-slate-400">
-          {job.progress?.label || '排队中…'}
-        </p>
+        <p className="mt-2 text-center text-sm text-ink2">{job.progress?.label || '排队中…'}</p>
       </div>
     </div>
   )

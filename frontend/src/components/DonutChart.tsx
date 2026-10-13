@@ -19,7 +19,7 @@ export function DonutChart({
         r={r}
         fill="none"
         strokeWidth="8"
-        className="stroke-slate-200 dark:stroke-slate-700"
+        className="stroke-line"
       />
       <circle
         cx={size / 2}
@@ -36,7 +36,7 @@ export function DonutChart({
         y="50%"
         textAnchor="middle"
         dominantBaseline="central"
-        className="rotate-90 fill-slate-700 text-sm font-bold dark:fill-slate-200"
+        className="rotate-90 fill-ink text-sm font-bold"
         style={{ transformOrigin: 'center' }}
       >
         {total > 0 ? Math.round(pct * 100) + '%' : '—'}

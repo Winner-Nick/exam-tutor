@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { Icon } from './Icon'
 
 export function PaperViewer({
   urlFor,
@@ -20,14 +21,14 @@ export function PaperViewer({
   }, [onClose])
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-slate-900/95" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex flex-col bg-black/85 backdrop-blur-sm" onClick={onClose}>
       <div className="flex items-center justify-between px-4 py-3 text-white">
         <span className="text-sm font-medium">原卷 · 共 {pageCount} 页</span>
         <button
           onClick={onClose}
-          className="rounded-lg px-3 py-1 text-sm hover:bg-white/10"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors hover:bg-white/10"
         >
-          关闭 ✕
+          关闭 <Icon name="x" size={15} />
         </button>
       </div>
       <div

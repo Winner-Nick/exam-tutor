@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, ApiError } from '../api'
-import { Spinner } from '../components/Spinner'
+import { Icon } from '../components/Icon'
 import { useToast } from '../components/Toast'
 import type { Student } from '../types'
 
@@ -30,9 +30,9 @@ function StudentRow({ student }: { student: Student }) {
   })
 
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-50 text-lg dark:bg-primary-900/40">
-        {student.is_self ? '🙋' : '🧑‍🎓'}
+    <div className="card flex items-center gap-3 p-4">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-50 font-serif text-base font-bold text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
+        {student.name.slice(0, 1)}
       </span>
       <div className="min-w-0 flex-1">
         {editing ? (
@@ -48,36 +48,32 @@ function StudentRow({ student }: { student: Student }) {
               onChange={(e) => setName(e.target.value)}
               autoFocus
               maxLength={32}
-              className="w-36 rounded-lg border border-slate-300 px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-800"
+              className="input w-36 px-2 py-1"
             />
-            <button type="submit" disabled={rename.isPending} className="text-sm text-primary-600">
+            <button type="submit" disabled={rename.isPending} className="text-sm text-primary-600 dark:text-primary-400">
               保存
             </button>
-            <button type="button" onClick={() => setEditing(false)} className="text-sm text-slate-400">
+            <button type="button" onClick={() => setEditing(false)} className="text-sm text-dim">
               取消
             </button>
           </form>
         ) : (
           <p className="truncate font-semibold">{student.name}</p>
         )}
-        <p className="mt-0.5 text-xs text-slate-400">
+        <p className="mt-0.5 text-xs text-dim">
           {student.submission_count} 次批改
           {(student.wrong_total ?? 0) > 0 && ` · 累计错题 ${student.wrong_total}`}
         </p>
       </div>
       <Link
         to={`/?student=${student.id}`}
-        className="rounded-lg px-2 py-1 text-sm text-primary-600 hover:bg-primary-50 dark:hover:bg-primary-900/30"
+        className="btn-ghost px-2.5 py-1.5 text-sm text-primary-600 dark:text-primary-400"
       >
         去批改
       </Link>
       {!editing && (
-        <button
-          onClick={() => setEditing(true)}
-          title="改名"
-          className="rounded-lg p-1.5 text-slate-300 hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-slate-800"
-        >
-          ✏️
+        <button onClick={() => setEditing(true)} title="改名" className="icon-btn p-1.5">
+          <Icon name="edit" size={16} />
         </button>
       )}
       {!student.is_self && (
@@ -86,9 +82,9 @@ function StudentRow({ student }: { student: Student }) {
             if (confirm(`确定删除学生「${student.name}」吗？`)) del.mutate()
           }}
           title="删除"
-          className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-900/30"
+          className="icon-btn p-1.5 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-900/30"
         >
-          🗑
+          <Icon name="trash" size={16} />
         </button>
       )}
     </div>
@@ -112,7 +108,7 @@ export function StudentsPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
-      <p className="text-sm text-slate-500 dark:text-slate-400">
+      <p className="text-sm text-ink2">
         管理你的学生。批改时选择对应学生，错题与统计将按学生分开记录；自己做题就选「我自己」。
       </p>
       <form
@@ -127,23 +123,26 @@ export function StudentsPage() {
           onChange={(e) => setName(e.target.value)}
           placeholder="学生姓名，如：小明"
           maxLength={32}
-          className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+          className="input flex-1"
         />
         <button
           type="submit"
           disabled={!name.trim() || create.isPending}
-          className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+          className="btn-primary shrink-0 px-4 py-2"
         >
-          {create.isPending ? '添加中…' : '＋ 添加学生'}
+          <Icon name="plus" size={16} />
+          {create.isPending ? '添加中…' : '添加学生'}
         </button>
       </form>
 
       {students.isPending ? (
-        <div className="flex justify-center py-12">
-          <Spinner className="h-7 w-7" />
+        <div className="space-y-3">
+          {[0, 1].map((i) => (
+            <div key={i} className="skeleton h-[74px] rounded-2xl" />
+          ))}
         </div>
       ) : students.isError ? (
-        <p className="py-12 text-center text-slate-400">加载失败，请刷新重试</p>
+        <p className="py-12 text-center text-dim">加载失败，请刷新重试</p>
       ) : (
         <div className="space-y-3">
           {students.data.students.map((s) => (
