@@ -4,7 +4,7 @@ cd "$(dirname "$0")" || exit 1
 # 外部显式传入的 HOST/PORT 优先于 .env（便于临时换端口调试）
 _HOST="${EXAMTUTOR_HOST:-}"; _PORT="${EXAMTUTOR_PORT:-}"
 set -a; [ -f .env ] && . ./.env; set +a
-# --workers 1 不可改：限流器、SSE 订阅、后台队列均为进程内存态，多进程会失效
+# --workers 1 不可改：任务执行协调、限流器、SSE 订阅与锁均依赖单进程，多进程会失效
 # --proxy-headers + 仅信任本机代理：取 Caddy 传来的 X-Forwarded-For 作为客户端 IP（限流按真实访客）
 exec .venv/bin/python -m uvicorn backend.app.main:app \
   --host "${_HOST:-${EXAMTUTOR_HOST:-0.0.0.0}}" \

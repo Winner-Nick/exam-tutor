@@ -20,12 +20,13 @@
 React SPA (Vite + TS + Tailwind, PWA)
    │  cookie 会话(JWT) · SSE 实时进度(+轮询兜底)
    ▼
-FastAPI ── SQLite(WAL) + data/ 文件存储
+FastAPI ── SQLite(WAL + task_runs) + data/ 文件存储
    │
-   ├─ 作业队列(2 worker)
+   ├─ 持久任务队列(2 worker;重启续跑/依赖重试/创建幂等)
    │   试卷入库:渲染每页(PyMuPDF/PIL) → DeepSeek 全量识别(题目+答案) → 入库复用
    │   作答批改:照片归一化 → DeepSeek 只输出 题号→学生答案 的小 JSON → 代码判分
-   │            └ 视觉结果按文件 SHA-256 与提取版本缓存,同文件同版本零成本复用
+   │            └ 按文件 SHA-256、模型/提取协议和试卷 revision 隔离视觉缓存
+   │   稳定题目 ID + 试卷版本：历史提交在后台增删改同步
    │
    └─ 讲解优先级队列(1 worker)
         DeepSeek 批量讲解错题(后台预生成;用户点开插队)/ 实时答疑
@@ -132,7 +133,9 @@ backend/
     store.py      DAO(users/students/papers/jobs/questions/chat)
     auth.py       bcrypt + JWT(httpOnly cookie) + 归属校验
     security.py   上传校验(PDF/图片) / 限流 / 安全响应头
-    workers.py    作业队列 + 讲解优先级队列
+    workers.py    持久任务调度 + 讲解优先级队列
+    run_store.py  任务代次/恢复/创建幂等
+    upload_utils.py 上传预算与文件复用
     events.py     SSE 事件总线
     pdf_utils.py  PDF/照片 → 页面图(EXIF 矫正/限边长/空白页检测)
     prompts.py    提示词(试卷全量识别 / 作答小输出识别 / 讲解 / 答疑)
@@ -179,4 +182,4 @@ cd frontend && npm install && cd ..
 
 - 简答/翻译等手写长文本难以稳定自动比对,标「待确认」交人工;涂改不清的选择题同样不瞎猜。
 - 作文等主观题不自动判分,可让 AI 家教点评。
-- 单进程部署(内存态队列/限流/SSE),不支持多 uvicorn worker;家庭/小班规模绰绰有余。
+- 单进程部署(任务元数据在 SQLite 持久化，执行协调/限流/SSE 仍依赖单进程),不支持多 uvicorn worker;家庭/小班规模绰绰有余。
