@@ -10,7 +10,7 @@ import weakref
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 
-from . import events, llm, pdf_utils, prompts, store
+from . import events, llm, pdf_utils, prompts, run_store, store
 from .db import transaction
 
 _CONF = {"high": 3, "medium": 2, "low": 1}
@@ -608,6 +608,11 @@ def _set_progress(job_id: str, stage: str, done: int, total: int, label: str) ->
     events.publish(job_id, "progress", {"stage": stage, "done": done, "total": total, "label": label})
 
 
+def _assert_run(run: dict | None) -> None:
+    if run is not None:
+        run_store.assert_current(run["id"], run["generation"], run["attempt"])
+
+
 def _stats(questions: list[dict]) -> dict:
     s = {"total": len(questions), "correct": 0, "wrong": 0, "unknown": 0, "subjective": 0}
     for q in questions:
@@ -641,7 +646,7 @@ def _preserve_overrides(job_id: str, questions: list[dict]) -> None:
     questions.sort(key=lambda q: _num_key(q.get("number")))
 
 
-def process_job(job_id: str) -> None:
+def process_job(job_id: str, run: dict | None = None) -> None:
     job = store.get_job(job_id)
     if not job:
         return
@@ -649,6 +654,7 @@ def process_job(job_id: str) -> None:
     jd = store.job_dir(job_id)
 
     try:
+        _assert_run(run)
         pages_cache = jd / "pages_raw.json"
         pages_dir = jd / "pages"
 
@@ -737,14 +743,16 @@ def process_job(job_id: str) -> None:
         meta["failed_pages"] = failed_pages
         meta["accepted_partial"] = False
         status = "partial" if failed_pages else "done"
-        store.replace_questions(job_id, questions)
-        store.update_job(
-            job_id, status=status, stage="done", meta=meta,
-            error="部分页面识别失败，请重试或接受" if failed_pages else None,
-            title=meta.get("title"), stats=_stats(questions),
-            progress_done=1, progress_total=1,
-            progress_label="部分完成" if failed_pages else "完成",
-        )
+        with transaction():
+            _assert_run(run)
+            store.replace_questions(job_id, questions)
+            store.update_job(
+                job_id, status=status, stage="done", meta=meta,
+                error="部分页面识别失败，请重试或接受" if failed_pages else None,
+                title=meta.get("title"), stats=_stats(questions),
+                progress_done=1, progress_total=1,
+                progress_label="部分完成" if failed_pages else "完成",
+            )
         events.publish(job_id, "job_done", {"status": status})
 
         if not failed_pages:
@@ -753,6 +761,8 @@ def process_job(job_id: str) -> None:
             if targets:
                 workers.enqueue_explanations(job_id, targets, priority=1)
 
+    except run_store.StaleRun:
+        raise
     except Exception as exc:  # noqa: BLE001
         store.update_job(job_id, status="error", error=f"{type(exc).__name__}: {exc}")
         events.publish(job_id, "job_error", {"error": f"{type(exc).__name__}: {exc}"})
@@ -976,13 +986,14 @@ def _set_paper_progress(paper_id: str, stage: str, done: int, total: int, label:
     events.publish(paper_id, "progress", {"stage": stage, "done": done, "total": total, "label": label})
 
 
-def process_paper(paper_id: str) -> None:
+def process_paper(paper_id: str, run: dict | None = None) -> None:
     with store.paper_lock(paper_id):
         paper = store.get_paper(paper_id)
         if not paper:
             return
         pd = store.paper_dir(paper_id)
         try:
+            _assert_run(run)
             files = store.list_paper_files(paper_id)
             if not files:
                 raise RuntimeError("试卷没有任何文件")
@@ -1037,10 +1048,12 @@ def process_paper(paper_id: str) -> None:
                 "numbering_needs_review": numbering_review,
                 "accepted_partial": False,
             })
-            store.replace_paper_questions(paper_id, questions)
+            with transaction():
+                _assert_run(run)
+                store.replace_paper_questions(paper_id, questions)
             if questions and not failed_pages:
                 try:
-                    complete_knowledge_points(paper_id, sync=False)
+                    complete_knowledge_points(paper_id, sync=False, run=run)
                 except Exception:  # noqa: BLE001
                     meta["knowledge_warning"] = "部分知识点暂未自动补全，可稍后重试"
             partial = bool(failed_pages or numbering_review or not questions)
@@ -1059,11 +1072,16 @@ def process_paper(paper_id: str) -> None:
             }
             if not paper.get("title"):
                 fields["title"] = meta.get("title")
-            store.update_paper(paper_id, **fields)
+            with transaction():
+                _assert_run(run)
+                store.update_paper(paper_id, **fields)
             paper_revision = store.get_paper(paper_id)["revision"]
             store.write_json_atomic(pd / "source_meta.json", {"paper_revision": paper_revision})
-            regrade_paper_submissions(paper_id, force=True)
+            from . import workers
+            workers.enqueue_paper_reconcile(paper_id, force=True)
             events.publish(paper_id, "paper_done", {"status": fields["status"]})
+        except run_store.StaleRun:
+            raise
         except Exception as exc:  # noqa: BLE001
             store.update_paper(paper_id, status="error", error=f"{type(exc).__name__}: {exc}")
             events.publish(paper_id, "paper_error", {"error": f"{type(exc).__name__}: {exc}"})
@@ -1168,10 +1186,12 @@ def _submission_snapshot(job: dict, paper: dict, paper_questions: list[dict],
     return meta, "partial" if partial else "done", "；".join(errors) or None
 
 
-def regrade_paper_submissions(paper_id: str, *, force: bool = False) -> int:
+def regrade_paper_submissions(paper_id: str, *, force: bool = False,
+                              run: dict | None = None) -> int:
     """按稳定 qid 全集 reconcile；每个提交独立在一个 DB 事务内落盘。"""
     changed_submissions = 0
     with store.paper_lock(paper_id):
+        _assert_run(run)
         paper = store.get_paper(paper_id)
         if not paper:
             return 0
@@ -1187,6 +1207,7 @@ def regrade_paper_submissions(paper_id: str, *, force: bool = False) -> int:
                 questions = _assemble_submission_questions(paper_questions, old_questions, None)
                 meta, status, error = _submission_snapshot(job, paper, paper_questions, questions)
                 with transaction():
+                    _assert_run(run)
                     store.replace_questions(job_id, questions)
                     stats = store.refresh_stats(job_id)
                     store.update_job(
@@ -1209,7 +1230,7 @@ def regrade_paper_submissions(paper_id: str, *, force: bool = False) -> int:
 
 
 def complete_knowledge_points(paper_id: str, overwrite: bool = False, *,
-                              sync: bool = True) -> int:
+                              sync: bool = True, run: dict | None = None) -> int:
     paper = store.get_paper(paper_id) or {}
     questions = [
         q for q in store.get_paper_questions(paper_id)
@@ -1227,11 +1248,13 @@ def complete_knowledge_points(paper_id: str, overwrite: bool = False, *,
             value = mapping.get(q["id"])
             if value and str(value).strip():
                 pending[q["id"]] = str(value).strip()[:200]
+    _assert_run(run)
     updated = store.update_paper_knowledge_points(
         paper_id, pending, mark_content_edited=False,
     ) if pending else 0
     if updated and sync:
-        regrade_paper_submissions(paper_id)
+        from . import workers
+        workers.enqueue_paper_reconcile(paper_id)
     return updated
 
 
@@ -1249,19 +1272,22 @@ def _answer_cache_mode(paper_id: str, revision: int) -> str:
     return f"ans-{paper_id}-r{revision}"
 
 
-def process_submission(job_id: str) -> None:
+def process_submission(job_id: str, run: dict | None = None) -> None:
     job = store.get_job(job_id)
     if not job:
         return
     jd = store.job_dir(job_id)
     try:
+        _assert_run(run)
         paper = store.get_paper(job["paper_id"])
         if not paper:
             raise RuntimeError("试卷不存在")
+        if paper["status"] != "ready":
+            raise run_store.RetryLater("试卷尚未准备完成，将延迟重试", delay=3.0)
         paper_revision = paper["revision"]
         paper_qs = store.get_paper_questions(job["paper_id"])
         if not paper_qs:
-            raise RuntimeError("试卷尚未识别完成，请稍后重试")
+            raise run_store.RetryLater("试卷尚未识别完成，将延迟重试", delay=2.0)
         store.update_job(job_id, paper_revision=paper_revision)
         files = store.job_files(job_id)
         if not files:
@@ -1374,12 +1400,12 @@ def process_submission(job_id: str) -> None:
             if not paper:
                 raise RuntimeError("试卷不存在")
             if paper["revision"] != paper_revision:
-                raise RuntimeError("试卷结构版本已变化，请重试本次提交")
+                raise run_store.RetryLater("试卷结构版本已变化，将重新识别并重试", delay=2.0)
             if paper["status"] != "ready":
-                raise RuntimeError("试卷尚未确认完整，请先处理失败页或明确接受部分结果")
+                raise run_store.RetryLater("试卷尚未确认完整，将延迟重试", delay=3.0)
             paper_qs = store.get_paper_questions(job["paper_id"])
             if not paper_qs:
-                raise RuntimeError("试卷没有题目，无法判分")
+                raise run_store.RetryLater("试卷没有题目，将延迟重试", delay=2.0)
             old_questions = store.get_questions(job_id)
             questions = _assemble_submission_questions(
                 paper_qs, old_questions, {k: v[0] for k, v in answers.items()},
@@ -1408,6 +1434,7 @@ def process_submission(job_id: str) -> None:
                 job, paper, paper_qs, questions, base_meta,
             )
             with transaction():
+                _assert_run(run)
                 store.replace_questions(job_id, questions)
                 stats = store.refresh_stats(job_id)
                 store.update_job(
@@ -1423,6 +1450,14 @@ def process_submission(job_id: str) -> None:
                 if targets:
                     workers.enqueue_explanations(job_id, targets, priority=1)
 
+    except run_store.StaleRun:
+        raise
+    except run_store.RetryLater:
+        store.update_job(job_id, status="processing", stage="waiting", error=None)
+        events.publish(job_id, "progress", {
+            "stage": "waiting", "done": 0, "total": 1, "label": "等待依赖就绪后重试",
+        })
+        raise
     except Exception as exc:  # noqa: BLE001
         store.update_job(job_id, status="error", error=f"{type(exc).__name__}: {exc}")
         events.publish(job_id, "job_error", {"error": f"{type(exc).__name__}: {exc}"})

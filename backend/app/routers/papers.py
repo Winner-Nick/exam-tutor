@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
-from .. import auth, events, pipeline, security, store, workers
+from .. import auth, events, pipeline, run_store, security, store, upload_utils, workers
 from ..config import settings
 from ..models import (
     KnowledgePointsRequest,
@@ -36,30 +36,103 @@ def _public(paper: dict, full: bool = False) -> dict:
     return paper
 
 
-async def _save_paper_files(paper_id: str, files: list[UploadFile], kind: str) -> None:
+async def _save_paper_files(paper_id: str, files: list[UploadFile], kind: str, *,
+                            initial_count: int = 0, initial_bytes: int = 0,
+                            initial_pages: int = 0) -> list[str]:
     created: list[str] = []
-    try:
-        for f in files:
-            fid = store.add_paper_file(paper_id, kind, f.filename, None)
-            created.append(fid)
-            _, sha = await security.save_upload(
-                f, store.paper_dir(paper_id) / "files" / fid,
-                allow_pdf=True, allow_image=True,
-            )
-            store.set_paper_file_sha(fid, sha)
-    except Exception:
-        for fid in created:
-            path = store.paper_file_path(paper_id, fid)
-            if path:
-                path.unlink(missing_ok=True)
-            store.delete_paper_file(fid, paper_id)
-        raise
+    total_bytes, total_pages = initial_bytes, initial_pages
+    for index, file in enumerate(files, start=initial_count + 1):
+        fid = store.add_paper_file(paper_id, kind, file.filename, None)
+        created.append(fid)
+        path, sha = await security.save_upload(
+            file, store.paper_dir(paper_id) / "files" / fid,
+            allow_pdf=True, allow_image=True,
+        )
+        size, pages = await upload_utils.inspect_source_async(path)
+        total_bytes += size
+        total_pages += pages
+        upload_utils.check_file_budget(
+            index, total_bytes, total_pages, max_files=MAX_FILES_PER_REQUEST,
+        )
+        store.set_paper_file_sha(fid, sha)
+    return created
+
+
+async def _paper_file_budget(paper_id: str) -> tuple[int, int, int]:
+    files = store.list_paper_files(paper_id)
+    total_bytes = total_pages = 0
+    for index, item in enumerate(files, start=1):
+        path = store.paper_file_path(paper_id, item["id"])
+        if path is None:
+            raise HTTPException(400, f"源文件缺失: {item.get('filename') or item['id']}")
+        size, pages = await upload_utils.inspect_source_async(path, item.get("page_count"))
+        total_bytes += size
+        total_pages += pages
+        upload_utils.check_file_budget(
+            index, total_bytes, total_pages, max_files=MAX_FILES_PER_REQUEST,
+        )
+    return len(files), total_bytes, total_pages
 
 
 def _mark_partial(paper: dict, message: str) -> None:
     meta = dict(paper.get("meta") or {})
     meta["accepted_partial"] = False
     store.update_paper(paper["id"], status="partial", error=message, meta=meta)
+
+
+def _idempotency_key(value: str | None) -> str | None:
+    if value is not None and (not value or len(value) > run_store.IDEMPOTENCY_KEY_MAX_LENGTH):
+        raise HTTPException(422, f"Idempotency-Key 长度需为 1-{run_store.IDEMPOTENCY_KEY_MAX_LENGTH}")
+    return value
+
+
+def _discard_paper(paper_id: str) -> None:
+    if store.get_paper(paper_id):
+        store.try_mark_paper_deleting(paper_id)
+        store.delete_paper(paper_id)
+    store.cleanup_path(store.PAPERS_DIR / paper_id)
+
+
+def _cleanup_failed_paper(paper_id: str, owner_id: int) -> None:
+    try:
+        _discard_paper(paper_id)
+    except OSError:
+        workers.enqueue_paper_cleanup({"id": paper_id, "user_id": owner_id})
+
+
+async def _create_paper_resource(paper_id: str, files: list[UploadFile], title: str | None,
+                                 subject: str | None, grade: str | None, kind: str,
+                                 user: dict, key: str | None) -> dict:
+    try:
+        if key:
+            _discard_paper(paper_id)
+        security.hit(f"paper:{user['id']}", 10, 3600, "上传过于频繁，请 1 小时后再试")
+        if not files or len(files) > MAX_FILES_PER_REQUEST:
+            raise HTTPException(400, f"一次最多上传 {MAX_FILES_PER_REQUEST} 个文件")
+        if kind not in _FILE_KINDS:
+            raise HTTPException(400, "无效的文件类型标记")
+        store.create_paper(
+            paper_id, user["id"], (title or "").strip() or None,
+            (subject or "").strip() or None, (grade or "").strip() or None,
+            max_processing=settings.max_processing_per_user,
+        )
+        await _save_paper_files(paper_id, files, kind)
+        if key:
+            run_store.mark_files_ready(user["id"], "create_paper", key)
+    except store.ProcessingLimitError:
+        _cleanup_failed_paper(paper_id, user["id"])
+        if key:
+            run_store.release_idempotency(user["id"], "create_paper", key)
+        raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
+    except Exception:
+        _cleanup_failed_paper(paper_id, user["id"])
+        if key:
+            run_store.release_idempotency(user["id"], "create_paper", key)
+        raise
+    workers.enqueue_paper(paper_id)
+    if key:
+        run_store.complete_idempotency(user["id"], "create_paper", key)
+    return {"paper_id": paper_id}
 
 
 @router.post("", status_code=201)
@@ -69,29 +142,29 @@ async def create_paper(
     subject: str | None = Form(default=None),
     grade: str | None = Form(default=None),
     kind: str = Form(default="mixed"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: dict = Depends(auth.require_teacher),
 ):
-    security.hit(f"paper:{user['id']}", 10, 3600, "上传过于频繁，请 1 小时后再试")
-    if not files or len(files) > MAX_FILES_PER_REQUEST:
-        raise HTTPException(400, f"一次最多上传 {MAX_FILES_PER_REQUEST} 个文件")
-    if kind not in _FILE_KINDS:
-        raise HTTPException(400, "无效的文件类型标记")
+    key = _idempotency_key(idempotency_key)
     paper_id = store.new_job_id()
-    try:
-        store.create_paper(
-            paper_id, user["id"], (title or "").strip() or None,
-            (subject or "").strip() or None, (grade or "").strip() or None,
-            max_processing=settings.max_processing_per_user,
-        )
-        await _save_paper_files(paper_id, files, kind)
-    except store.ProcessingLimitError:
-        store.delete_paper(paper_id)
-        raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
-    except Exception:
-        store.delete_paper(paper_id)
-        raise
-    workers.enqueue_paper(paper_id)
-    return {"paper_id": paper_id}
+    if key:
+        async with run_store.async_idempotency_lock(user["id"], "create_paper", key):
+            with run_store.idempotency_lock(user["id"], "create_paper", key):
+                try:
+                    paper_id, duplicate = run_store.begin_idempotency(
+                        user["id"], "create_paper", key, "paper", paper_id,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(409, str(exc)) from None
+                if duplicate:
+                    workers.enqueue_paper(paper_id)
+                    return {"paper_id": paper_id}
+                return await _create_paper_resource(
+                    paper_id, files, title, subject, grade, kind, user, key,
+                )
+    return await _create_paper_resource(
+        paper_id, files, title, subject, grade, kind, user, None,
+    )
 
 
 @router.post("/manual", status_code=201)
@@ -153,23 +226,32 @@ def update_paper(req: PaperUpdateRequest, paper: dict = Depends(auth.get_owned_p
 
 @router.delete("/{paper_id}")
 def delete_paper(paper: dict = Depends(auth.get_owned_paper)):
-    if paper["status"] == "processing":
-        raise HTTPException(409, "试卷正在识别中，暂不能删除")
-    if store.list_submission_ids_for_paper(paper["id"]):
-        raise HTTPException(409, "该试卷已有批改记录，请先在批改列表筛选并删除对应记录")
-    try:
-        store.delete_paper(paper["id"])
-    except sqlite3.IntegrityError:
-        raise HTTPException(409, "该试卷已有批改记录，请先删除对应记录") from None
+    with store.paper_lock(paper["id"]):
+        if paper["status"] == "processing":
+            raise HTTPException(409, "试卷正在识别中，暂不能删除")
+        if store.list_submission_ids_for_paper(paper["id"]):
+            raise HTTPException(409, "该试卷已有批改记录，请先在批改列表筛选并删除对应记录")
+        if not store.try_mark_paper_deleting(paper["id"]):
+            raise HTTPException(409, "试卷正在识别中，暂不能删除")
+        workers.enqueue_paper_cleanup(paper)
+        try:
+            if not store.delete_paper(paper["id"]):
+                raise HTTPException(409, "试卷正在识别中，暂不能删除")
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "该试卷已有批改记录，请先删除对应记录") from None
     return {"ok": True}
 
 
 def _retry_paper(paper: dict):
-    if not store.list_paper_files(paper["id"]):
-        raise HTTPException(400, "没有可重新识别的文件，请先上传文件")
-    if not store.try_mark_paper_processing(paper["id"]):
-        raise HTTPException(409, "试卷正在识别中")
-    workers.enqueue_paper(paper["id"])
+    with store.paper_lock(paper["id"]):
+        if not store.list_paper_files(paper["id"]):
+            raise HTTPException(400, "没有可重新识别的文件，请先上传文件")
+        try:
+            if not store.try_mark_paper_processing(paper["id"], settings.max_processing_per_user):
+                raise HTTPException(409, "试卷正在识别中")
+        except store.ProcessingLimitError:
+            raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
+        workers.enqueue_paper(paper["id"])
     return {"ok": True}
 
 
@@ -192,7 +274,7 @@ def accept_partial(paper: dict = Depends(auth.get_owned_paper)):
     meta = dict(paper.get("meta") or {})
     meta["accepted_partial"] = True
     store.update_paper(paper["id"], status="ready", error=None, meta=meta)
-    pipeline.regrade_paper_submissions(paper["id"], force=True)
+    workers.enqueue_paper_reconcile(paper["id"], force=True)
     return {"ok": True}
 
 
@@ -206,42 +288,71 @@ async def add_files(
         raise HTTPException(400, f"一次最多上传 {MAX_FILES_PER_REQUEST} 个文件")
     if kind not in _FILE_KINDS:
         raise HTTPException(400, "无效的文件类型标记")
-    if not store.try_mark_paper_processing(paper["id"]):
-        raise HTTPException(409, "试卷正在识别中，请稍后再补传")
-    prev_status = paper["status"]
-    try:
-        await _save_paper_files(paper["id"], files, kind)
-    except Exception:
-        store.update_paper(
-            paper["id"], status=prev_status, stage="done",
-            progress_done=1, progress_total=1, progress_label="已恢复",
-        )
-        raise
-    workers.enqueue_paper(paper["id"])
+    with store.paper_lock(paper["id"]):
+        security.hit(f"paper:{paper['user_id']}", 10, 3600, "上传过于频繁，请 1 小时后再试")
+        try:
+            if not store.try_mark_paper_processing(paper["id"], settings.max_processing_per_user):
+                raise HTTPException(409, "试卷正在识别中，请稍后再补传")
+        except store.ProcessingLimitError:
+            raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
+        before = {item["id"] for item in store.list_paper_files(paper["id"])}
+        try:
+            count, total_bytes, total_pages = await _paper_file_budget(paper["id"])
+            await _save_paper_files(
+                paper["id"], files, kind, initial_count=count,
+                initial_bytes=total_bytes, initial_pages=total_pages,
+            )
+        except Exception:
+            failed = []
+            for item in store.list_paper_files(paper["id"]):
+                if item["id"] in before:
+                    continue
+                path = store.paper_file_path(paper["id"], item["id"])
+                if path:
+                    try:
+                        store.cleanup_path(path)
+                    except OSError:
+                        failed.append(str(path))
+                store.delete_paper_file(item["id"], paper["id"])
+            if failed:
+                workers.enqueue_file_cleanup("paper", paper["id"], paper["user_id"], failed)
+            store.update_paper(
+                paper["id"], status=paper["status"], stage=paper.get("stage"),
+                error=paper.get("error"), progress_done=paper["progress"]["done"],
+                progress_total=paper["progress"]["total"],
+                progress_label=paper["progress"].get("label"),
+            )
+            raise
+        workers.enqueue_paper(paper["id"])
     return {"ok": True, "file_count": len(store.list_paper_files(paper["id"]))}
 
 
 @router.delete("/{paper_id}/files/{file_id}")
 def delete_file(file_id: str, paper: dict = Depends(auth.get_owned_paper)):
-    if paper["status"] == "processing":
-        raise HTTPException(409, "正在识别中，暂不能删除文件")
-    target = next((f for f in store.list_paper_files(paper["id"]) if f["id"] == file_id), None)
-    if not target:
-        raise HTTPException(404, "文件不存在")
-    path = store.paper_file_path(paper["id"], file_id)
-    store.delete_paper_file(file_id, paper["id"])
-    if path:
-        path.unlink(missing_ok=True)
-    remaining = store.list_paper_files(paper["id"])
-    if remaining:
-        store.try_mark_paper_processing(paper["id"])
-        workers.enqueue_paper(paper["id"])
-    else:
-        store.update_paper(paper["id"], page_count=0)
-        if store.get_paper_questions(paper["id"]):
-            store.update_paper(paper["id"], status="ready", error=None)
+    with store.paper_lock(paper["id"]):
+        if paper["status"] == "processing":
+            raise HTTPException(409, "正在识别中，暂不能删除文件")
+        target = next((f for f in store.list_paper_files(paper["id"]) if f["id"] == file_id), None)
+        if not target:
+            raise HTTPException(404, "文件不存在")
+        try:
+            if not store.try_mark_paper_processing(paper["id"], settings.max_processing_per_user):
+                raise HTTPException(409, "试卷正在识别中，请稍后再试")
+        except store.ProcessingLimitError:
+            raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
+        store.delete_paper_file(file_id, paper["id"])
+        path = store.paper_file_path(paper["id"], file_id)
+        if path:
+            store.cleanup_path(path)
+        remaining = store.list_paper_files(paper["id"])
+        if remaining:
+            workers.enqueue_paper(paper["id"])
         else:
-            _mark_partial(paper, "没有可用文件，请上传或手动录题")
+            store.update_paper(paper["id"], page_count=0)
+            if store.get_paper_questions(paper["id"]):
+                store.update_paper(paper["id"], status="ready", error=None)
+            else:
+                _mark_partial(paper, "没有可用文件，请上传或手动录题")
     return {"ok": True}
 
 
@@ -262,7 +373,7 @@ def add_question(req: PaperQuestionCreateRequest, paper: dict = Depends(auth.get
     meta = dict(paper.get("meta") or {})
     if not meta.get("failed_pages"):
         store.update_paper(paper["id"], status="ready", error=None)
-    pipeline.regrade_paper_submissions(paper["id"])
+    workers.enqueue_paper_reconcile(paper["id"])
     return result
 
 
@@ -294,8 +405,13 @@ def patch_question(
             if str(exc) == "题号不能为空":
                 raise HTTPException(422, str(exc)) from None
             raise
-        regraded = pipeline.regrade_paper_submissions(paper["id"])
-    return {"question": store.get_paper_question(paper["id"], qid), "regraded": regraded}
+        regraded = workers.enqueue_paper_reconcile(paper["id"])
+    return {
+        "question": store.get_paper_question(paper["id"], qid),
+        "regraded": regraded,
+        "regrade_pending": regraded > 0,
+        "pending_sync": regraded,
+    }
 
 
 @router.delete("/{paper_id}/questions/{qid}")
@@ -305,7 +421,7 @@ def delete_question(qid: str, paper: dict = Depends(auth.get_owned_paper)):
     with store.paper_lock(paper["id"]):
         if not store.delete_paper_question(paper["id"], qid):
             raise HTTPException(404, "题目不存在")
-        pipeline.regrade_paper_submissions(paper["id"])
+        workers.enqueue_paper_reconcile(paper["id"])
     return {"ok": True}
 
 
@@ -325,7 +441,7 @@ def knowledge_points(
                 paper["id"], items, mark_content_edited=True,
             )
             if count:
-                pipeline.regrade_paper_submissions(paper["id"])
+                workers.enqueue_paper_reconcile(paper["id"])
         else:
             count = pipeline.complete_knowledge_points(paper["id"], overwrite=bool(req and req.overwrite))
     return {"ok": True, "updated": count}
@@ -334,7 +450,7 @@ def knowledge_points(
 @router.get("/{paper_id}/events")
 def paper_events(paper: dict = Depends(auth.get_owned_paper)):
     return StreamingResponse(
-        events.sse_stream(paper["id"], _public(dict(paper))),
+        events.sse_stream(paper["id"], lambda: _public(store.get_paper(paper["id"]))),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

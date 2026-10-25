@@ -56,14 +56,15 @@ def override_answer(
             q["status"] = req.status
         else:
             pipeline.regrade([q])
-        store.update_question(
-            job_id, qid,
-            student_answer=q.get("student_answer"), status=q["status"], overridden=1,
-        )
-        updated = store.get_question(job_id, qid)
+        with transaction():
+            store.update_question(
+                job_id, qid,
+                student_answer=q.get("student_answer"), status=q["status"], overridden=1,
+            )
+            updated = store.get_question(job_id, qid)
+            stats = store.refresh_stats(job_id)
         if updated["status"] in ("wrong", "unknown") and not updated.get("explanation"):
             workers.enqueue_explanations(job_id, [qid], priority=0)
-        stats = store.refresh_stats(job_id)
     return {"question": _public(job_id, qid), "stats": stats}
 
 

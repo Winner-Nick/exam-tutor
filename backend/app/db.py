@@ -422,7 +422,56 @@ def _v11(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9, _v10, _v11]
+def _v12(conn: sqlite3.Connection) -> None:
+    """持久任务运行、资源活动互斥与创建幂等预留。"""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_runs (
+            id TEXT PRIMARY KEY,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            owner_id INTEGER NOT NULL REFERENCES users(id),
+            status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'waiting', 'done', 'error')),
+            generation INTEGER NOT NULL,
+            attempt INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 5,
+            options_json TEXT NOT NULL DEFAULT '{}',
+            available_at REAL NOT NULL,
+            heartbeat_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            started_at REAL,
+            finished_at REAL,
+            last_error TEXT,
+            UNIQUE(resource_type, resource_id, generation)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_active_resource
+            ON task_runs(resource_type, resource_id)
+            WHERE status IN ('queued', 'running', 'waiting');
+        CREATE INDEX IF NOT EXISTS idx_task_runs_available
+            ON task_runs(status, available_at);
+        CREATE INDEX IF NOT EXISTS idx_task_runs_owner
+            ON task_runs(owner_id, status);
+
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            owner_id INTEGER NOT NULL REFERENCES users(id),
+            operation TEXT NOT NULL,
+            key TEXT NOT NULL,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY(owner_id, operation, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_idempotency_resource
+            ON idempotency_keys(resource_type, resource_id);
+        """
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9, _v10, _v11, _v12]
 
 
 def init_db() -> None:

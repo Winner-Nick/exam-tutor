@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import llm, pdf_utils, pipeline, store, workers
+from app import llm, pdf_utils, pipeline, run_store, store, workers
 from app.models import KnowledgePointsRequest
 from app.routers import jobs as jobs_router
 from app.routers import papers as papers_router
@@ -164,6 +164,10 @@ def test_manual_knowledge_point_items_bump_once_and_sync(monkeypatch):
     assert result == {"ok": True, "updated": 1}
     assert store.get_paper(paper_id)["revision"] == revision + 1
     assert store.get_paper_question(paper_id, "q1")["content_edited"] is True
+    assert store.get_job(job_id)["sync_pending"] is True
+    run = next(run for run in run_store.list_active_runs() if run["operation"] == "reconcile")
+    workers._execute_run_id(run["id"])
+    assert run_store.get_run(run["id"])["status"] == "done"
     assert store.get_question(job_id, "q1")["knowledge_point"] == "几何"
     assert store.get_job(job_id)["applied_paper_revision"] == revision + 1
 
@@ -219,7 +223,8 @@ def test_revision_change_during_ocr_does_not_apply_old_observations(monkeypatch)
 
     assert store.get_questions(job_id) == before
     job = store.get_job(job_id)
-    assert job["status"] == "error"
+    assert job["status"] == "processing"
+    assert job["stage"] == "waiting"
     assert job["applied_paper_revision"] == 1
 
 

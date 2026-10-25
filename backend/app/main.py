@@ -32,8 +32,11 @@ async def lifespan(app: FastAPI):
     init_db()
     events.set_loop(asyncio.get_running_loop())
     workers.start()
-    workers.resume_pending()  # 重启续跑：处理中的作业与中断的讲解
-    yield
+    workers.resume_pending()  # 重启续跑：持久任务、旧处理记录与中断的讲解
+    try:
+        yield
+    finally:
+        workers.stop()
 
 
 app = FastAPI(title="ExamTutor", version=__version__, lifespan=lifespan,

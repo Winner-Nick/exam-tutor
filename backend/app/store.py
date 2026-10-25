@@ -331,6 +331,7 @@ def _job_row_to_dict(row) -> dict:
         "id": row["id"],
         "user_id": row["user_id"],
         "filename": row["filename"],
+        "title": row["title"],
         "pdf_sha256": row["pdf_sha256"],
         "kind": row["kind"],
         "paper_id": row["paper_id"],
@@ -341,6 +342,13 @@ def _job_row_to_dict(row) -> dict:
         "paper_title": row["paper_title"] if "paper_title" in keys else None,
         "subject": row["paper_subject"] if "paper_subject" in keys else None,
         "grade": row["paper_grade"] if "paper_grade" in keys else None,
+        "sync_pending": bool(
+            row["paper_id"] and (
+                row["applied_paper_revision"] is None
+                or row["applied_paper_revision"] < (row["paper_current_revision"] or 0)
+                or row["reconcile_pending"]
+            )
+        ),
         "status": row["status"],
         "stage": row["stage"],
         "progress": {
@@ -357,7 +365,14 @@ def _job_row_to_dict(row) -> dict:
 
 
 _JOB_SELECT = """SELECT j.*, s.name AS student_name, p.title AS paper_title,
-                        p.subject AS paper_subject, p.grade AS paper_grade
+                        p.subject AS paper_subject, p.grade AS paper_grade,
+                        p.revision AS paper_current_revision,
+                        EXISTS(
+                          SELECT 1 FROM task_runs tr
+                          WHERE tr.resource_type = 'paper' AND tr.resource_id = j.paper_id
+                            AND tr.operation = 'reconcile'
+                            AND tr.status IN ('queued', 'running', 'waiting')
+                        ) AS reconcile_pending
                  FROM jobs j
                  LEFT JOIN students s ON s.id = j.student_id
                  LEFT JOIN papers p ON p.id = j.paper_id"""
@@ -407,10 +422,30 @@ def list_jobs(user_id: int, student_id: int | None = None,
     return list_jobs_page(user_id, student_id, paper_id)[0]
 
 
-def delete_job(job_id: str) -> None:
+def delete_job(job_id: str) -> bool:
     with transaction():
-        get_conn().execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-    shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
+        cur = get_conn().execute(
+            "DELETE FROM jobs WHERE id = ? AND status != 'processing'", (job_id,),
+        )
+    return cur.rowcount > 0
+
+
+def cleanup_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def cleanup_answer_cache(paper_id: str, sha256: str) -> None:
+    for other_id in list_submission_ids_for_paper(paper_id):
+        if any(item.get("sha256") == sha256 for item in job_files(other_id)):
+            return
+    legacy = vision_cache_path(sha256, f"ans-{paper_id}")
+    legacy.unlink(missing_ok=True)
+    for path in legacy.parent.glob(f"{sha256}.ans-{paper_id}-r*"):
+        if path.is_file():
+            path.unlink()
 
 
 def find_reusable_job_by_sha(sha256: str, exclude_id: str) -> str | None:
@@ -441,6 +476,11 @@ def count_recent_uploads(user_id: int, hours: float = 24) -> int:
 
 def list_processing_job_ids() -> list[str]:
     rows = get_conn().execute("SELECT id FROM jobs WHERE status = 'processing'").fetchall()
+    return [r["id"] for r in rows]
+
+
+def list_deleting_job_ids() -> list[str]:
+    rows = get_conn().execute("SELECT id FROM jobs WHERE status = 'deleting'").fetchall()
     return [r["id"] for r in rows]
 
 
@@ -943,11 +983,12 @@ def list_papers(user_id: int) -> list[dict]:
     return list_papers_page(user_id)[0]
 
 
-def delete_paper(paper_id: str) -> None:
-    conn = get_conn()
+def delete_paper(paper_id: str) -> bool:
     with transaction():
-        conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
-    shutil.rmtree(PAPERS_DIR / paper_id, ignore_errors=True)
+        cur = get_conn().execute(
+            "DELETE FROM papers WHERE id = ? AND status != 'processing'", (paper_id,),
+        )
+    return cur.rowcount > 0
 
 
 def count_processing_papers(user_id: int) -> int:
@@ -957,30 +998,53 @@ def count_processing_papers(user_id: int) -> int:
     ).fetchone()[0]
 
 
-def try_mark_paper_processing(paper_id: str) -> bool:
-    """原子占位：仅当试卷当前非 processing 时置为 processing。防双击/重试导致
-    同一试卷被两个 worker 并发处理（渲染目录会被互相清空）。"""
+def try_mark_paper_processing(paper_id: str, max_processing: int | None = None) -> bool:
     conn = get_conn()
     with transaction():
+        row = conn.execute("SELECT status, user_id FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        if not row or row["status"] in ("processing", "deleting"):
+            return False
+        _reserve_processing_slot(conn, row["user_id"], max_processing)
         cur = conn.execute(
             """UPDATE papers SET status = 'processing', stage = 'queued',
                       progress_done = 0, progress_total = 1, progress_label = '排队中…',
                       error = NULL
-               WHERE id = ? AND status != 'processing'""",
+               WHERE id = ? AND status NOT IN ('processing', 'deleting')""",
             (paper_id,),
         )
     return cur.rowcount > 0
 
 
-def try_mark_job_processing(job_id: str) -> bool:
-    """同上，作答提交补拍时的原子占位。"""
+def try_mark_job_processing(job_id: str, max_processing: int | None = None) -> bool:
     conn = get_conn()
     with transaction():
+        row = conn.execute("SELECT status, user_id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row or row["status"] in ("processing", "deleting"):
+            return False
+        _reserve_processing_slot(conn, row["user_id"], max_processing)
         cur = conn.execute(
             """UPDATE jobs SET status = 'processing', stage = 'queued',
                       progress_done = 0, progress_total = 1, progress_label = '排队中…',
                       error = NULL
-               WHERE id = ? AND status != 'processing'""",
+               WHERE id = ? AND status NOT IN ('processing', 'deleting')""",
+            (job_id,),
+        )
+    return cur.rowcount > 0
+
+
+def try_mark_paper_deleting(paper_id: str) -> bool:
+    with transaction():
+        cur = get_conn().execute(
+            "UPDATE papers SET status = 'deleting' WHERE id = ? AND status != 'deleting'",
+            (paper_id,),
+        )
+    return cur.rowcount > 0
+
+
+def try_mark_job_deleting(job_id: str) -> bool:
+    with transaction():
+        cur = get_conn().execute(
+            "UPDATE jobs SET status = 'deleting' WHERE id = ? AND status != 'deleting'",
             (job_id,),
         )
     return cur.rowcount > 0
@@ -988,6 +1052,11 @@ def try_mark_job_processing(job_id: str) -> bool:
 
 def list_processing_paper_ids() -> list[str]:
     rows = get_conn().execute("SELECT id FROM papers WHERE status = 'processing'").fetchall()
+    return [r["id"] for r in rows]
+
+
+def list_deleting_paper_ids() -> list[str]:
+    rows = get_conn().execute("SELECT id FROM papers WHERE status = 'deleting'").fetchall()
     return [r["id"] for r in rows]
 
 
