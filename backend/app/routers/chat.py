@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import auth, llm, prompts, security, store
+from .. import auth, chat_store, llm, prompts, security, store
 from ..models import AskRequest
 
 router = APIRouter(prefix="/api/jobs/{job_id}", tags=["chat"])
@@ -31,16 +31,19 @@ def ask(
             "role": "system",
             "content": prompts.chat_job_context(job, store.get_questions(job_id)),
         })
-    messages.extend(store.get_chat(job_id, qid)[-12:])
-    messages.append({"role": "user", "content": question})
-    answer = llm.deepseek_chat(messages)
-    store.add_chat_message(job_id, qid, "user", question)
-    store.add_chat_message(job_id, qid, "assistant", answer)
+    with chat_store.chat_lock(job_id, qid):
+        messages.extend(chat_store.recent_chat(job_id, qid))
+        messages.append({"role": "user", "content": question})
+        answer = llm.deepseek_chat(messages)
+        chat_store.add_chat_exchange(job_id, qid, question, answer)
     return {"answer": answer}
 
 
 @router.get("/chat")
-def get_chat(qid: str | None = None, job: dict = Depends(auth.get_owned_job)):
+def get_chat(qid: str | None = None, limit: int = 100, before_id: int | None = None,
+             job: dict = Depends(auth.get_owned_job)):
     if qid and not store.get_question(job["id"], qid):
         raise HTTPException(404, "当前题目不存在")
-    return {"messages": store.get_chat(job["id"], qid or None)}
+    limit = max(1, min(limit, 200))
+    messages, has_more = chat_store.get_chat_page(job["id"], qid or None, limit, before_id)
+    return {"messages": messages, "has_more": has_more}
