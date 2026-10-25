@@ -8,18 +8,33 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 _loop: asyncio.AbstractEventLoop | None = None
 _subs: dict[str, set[asyncio.Queue]] = {}
 _lock = threading.Lock()
 
-PING_INTERVAL = 15  # 秒；无事件时的心跳，防代理断开空闲连接
+PING_INTERVAL = 15
+QUEUE_SIZE = 128
 
 
 def set_loop(loop: asyncio.AbstractEventLoop) -> None:
     global _loop
     _loop = loop
+
+
+def _offer(q: asyncio.Queue, event: str, data: dict) -> None:
+    if q.full():
+        if event == "progress":
+            return
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+    try:
+        q.put_nowait((event, data))
+    except asyncio.QueueFull:
+        pass
 
 
 def publish(job_id: str, event: str, data: dict) -> None:
@@ -30,13 +45,13 @@ def publish(job_id: str, event: str, data: dict) -> None:
         queues = list(_subs.get(job_id, ()))
     for q in queues:
         try:
-            _loop.call_soon_threadsafe(q.put_nowait, (event, data))
+            _loop.call_soon_threadsafe(_offer, q, event, data)
         except RuntimeError:
-            return  # 事件循环已关闭（shutdown 中）
+            return
 
 
 def _subscribe(job_id: str) -> asyncio.Queue:
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_SIZE)
     with _lock:
         _subs.setdefault(job_id, set()).add(q)
     return q
@@ -55,11 +70,12 @@ def _fmt(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def sse_stream(job_id: str, snapshot: dict) -> AsyncIterator[str]:
-    """先推完整当前状态（解决连接建立前错过的事件），随后持续转发新事件。"""
+async def sse_stream(job_id: str, snapshot: dict | Callable[[], dict]) -> AsyncIterator[str]:
+    """先订阅再读取快照；连接期间保留完成事件并限制待发送事件数。"""
     q = _subscribe(job_id)
     try:
-        yield _fmt("snapshot", snapshot)
+        current = snapshot() if callable(snapshot) else snapshot
+        yield _fmt("snapshot", current)
         while True:
             try:
                 event, data = await asyncio.wait_for(q.get(), timeout=PING_INTERVAL)
