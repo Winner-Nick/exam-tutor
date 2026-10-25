@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .config import JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR
+from .config import JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR, VISION_CACHE_VERSION
 from .db import get_conn, transaction
 
 
@@ -73,8 +73,8 @@ def paper_dir(paper_id: str) -> Path:
 
 
 def vision_cache_path(sha256: str, mode: str) -> Path:
-    """视觉识别结果缓存。mode: 'full'（试卷全量）或 'ans-{paper_id}'（仅学生答案）。"""
-    return VISION_CACHE_DIR / f"{sha256}.{mode}.json"
+    """视觉缓存同时绑定模型与提取协议，升级后不会命中旧模型结果。"""
+    return VISION_CACHE_DIR / f"{sha256}.{mode}.{VISION_CACHE_VERSION}.json"
 
 
 def paper_file_path(paper_id: str, file_id: str) -> Path | None:

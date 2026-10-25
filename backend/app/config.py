@@ -19,17 +19,16 @@ for _d in (JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 
+DEEPSEEK_MODEL = "deepseek-v4-1-flash-261017"
+VISION_CACHE_VERSION = f"{DEEPSEEK_MODEL}-schema2"
+
+
 @dataclass(frozen=True)
 class Settings:
-    # 视觉识别（OpenRouter -> Gemini Flash）
-    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    vision_model: str = os.getenv("VISION_MODEL", "google/gemini-3.5-flash")
-
-    # 文本推理（DeepSeek）
+    # 视觉识别与文本推理共用当前 DeepSeek 中转。模型随代码和缓存协议一起升级。
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    deepseek_model: str = DEEPSEEK_MODEL
 
     # 服务与处理参数
     host: str = os.getenv("EXAMTUTOR_HOST", "0.0.0.0")
@@ -50,10 +49,8 @@ class Settings:
 
     def validate(self) -> list[str]:
         problems = []
-        if not self.openrouter_api_key:
-            problems.append("缺少 OPENROUTER_API_KEY（视觉识别用）")
         if not self.deepseek_api_key:
-            problems.append("缺少 DEEPSEEK_API_KEY（文本推理用）")
+            problems.append("缺少 DEEPSEEK_API_KEY（视觉识别与文本推理用）")
         if not self.jwt_secret:
             problems.append("缺少 JWT_SECRET（会话签名用，可用 secrets.token_urlsafe(48) 生成）")
         return problems

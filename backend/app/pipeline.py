@@ -294,7 +294,7 @@ def process_job(job_id: str) -> None:
         pages_cache = jd / "pages_raw.json"
         pages_dir = jd / "pages"
 
-        # 0) 同内容 PDF 去重：直接复用旧作业的页面图与视觉识别结果（Gemini 成本为 0）
+        # 0) 同内容 PDF 去重：直接复用旧作业的页面图与视觉识别结果（DeepSeek 成本为 0）
         if not pages_cache.exists() and job.get("pdf_sha256"):
             donor = store.find_reusable_job_by_sha(job["pdf_sha256"], job_id)
             if donor:
@@ -683,7 +683,7 @@ def complete_knowledge_points(paper_id: str, overwrite: bool = False) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 新流程：作答判分（Gemini 只输出 题号->学生答案，token 极小）
+# 新流程：作答判分（DeepSeek 只输出 题号->学生答案，token 极小）
 # ---------------------------------------------------------------------------
 
 def grade_submission_questions(paper_questions: list[dict],

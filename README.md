@@ -23,9 +23,9 @@ React SPA (Vite + TS + Tailwind, PWA)
 FastAPI ── SQLite(WAL) + data/ 文件存储
    │
    ├─ 作业队列(2 worker)
-   │   试卷入库:渲染每页(PyMuPDF/PIL) → Gemini 全量识别(题目+答案) → 入库复用
-   │   作答批改:照片归一化 → Gemini 只输出 题号→学生答案 的小 JSON → 代码判分
-   │            └ 视觉结果按文件 SHA-256 缓存,同文件零成本(跨试卷/跨提交复用)
+   │   试卷入库:渲染每页(PyMuPDF/PIL) → DeepSeek 全量识别(题目+答案) → 入库复用
+   │   作答批改:照片归一化 → DeepSeek 只输出 题号→学生答案 的小 JSON → 代码判分
+   │            └ 视觉结果按文件 SHA-256 与提取版本缓存,同文件同版本零成本复用
    │
    └─ 讲解优先级队列(1 worker)
         DeepSeek 批量讲解错题(后台预生成;用户点开插队)/ 实时答疑
@@ -56,14 +56,16 @@ cd frontend && npm install && npm run build && cd ..
 
 | 变量 | 说明 |
 |---|---|
-| `OPENROUTER_API_KEY` | OpenRouter 密钥,供 Gemini 视觉识别 |
-| `DEEPSEEK_API_KEY` | DeepSeek 密钥,供讲解/答疑 |
+| `DEEPSEEK_API_KEY` | DeepSeek 中转密钥,供视觉识别/讲解/答疑 |
+| `DEEPSEEK_BASE_URL` | DeepSeek 中转的 OpenAI 兼容地址 |
 | `JWT_SECRET` | 会话签名密钥(必填,生成方式见 .env.example) |
 | `ALLOW_OPEN_REGISTER` | 设 `1` 开放注册;默认邀请码制 |
 | `COOKIE_SECURE` | 有 HTTPS 反代时设 `1` |
 | `MAX_UPLOAD_MB` / `MAX_PAGES` | 上传体积/页数上限,默认 30 / 30 |
 | `RENDER_MAX_DIM` | 渲染最长边(视觉成本主杠杆),默认 `1280` |
 | `VISION_CONCURRENCY` | 视觉并发,小内存机器建议 `2-3` |
+
+视觉与文本统一使用 `deepseek-v4-1-flash-261017`。模型在 `backend/app/config.py` 中随代码和缓存协议固定，不再通过 `VISION_MODEL` / `DEEPSEEK_MODEL` 环境变量切换；升级模型时必须同步升级缓存版本并跑识别回归，旧缓存不会混入新链路。
 
 完整列表见 `.env.example`。`.env` 已被 `.gitignore` 忽略,切勿提交密钥。
 
@@ -134,7 +136,7 @@ backend/
     events.py     SSE 事件总线
     pdf_utils.py  PDF/照片 → 页面图(EXIF 矫正/限边长/空白页检测)
     prompts.py    提示词(试卷全量识别 / 作答小输出识别 / 讲解 / 答疑)
-    llm.py        Gemini 视觉 / DeepSeek 客户端
+    llm.py        DeepSeek 视觉与文本统一客户端
     pipeline.py   试卷入库 + 作答判分 + 补拍合并
     routers/      auth / students / papers / jobs / questions / chat / insights
   scripts/        数据迁移脚本

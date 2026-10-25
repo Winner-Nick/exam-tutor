@@ -1,4 +1,4 @@
-"""LLM 客户端封装：Gemini 视觉（OpenRouter）+ DeepSeek 文本。"""
+"""DeepSeek 中转客户端：视觉识别、结构化讲解与实时答疑。"""
 from __future__ import annotations
 
 import json
@@ -12,17 +12,11 @@ from openai import OpenAI
 from . import prompts
 from .config import settings
 
-_vision_client = OpenAI(
-    api_key=settings.openrouter_api_key,
-    base_url=settings.openrouter_base_url,
-    timeout=120,  # SDK 默认 600s 太长：单页卡死会占住 worker 近半小时
-    max_retries=0,  # 重试统一由 _retry 负责，避免 SDK×外层双重放大
-)
 _deepseek_client = OpenAI(
     api_key=settings.deepseek_api_key,
     base_url=settings.deepseek_base_url,
-    timeout=120,
-    max_retries=0,
+    timeout=120,  # SDK 默认 600s 太长：单页卡死会占住 worker 近半小时
+    max_retries=0,  # 重试统一由 _retry 负责，避免 SDK×外层双重放大
 )
 
 
@@ -73,15 +67,15 @@ def vision_extract_page(
     user: str | None = None,
     max_tokens: int = 6000,
 ) -> dict:
-    """用 Gemini 识别一页扫描图，返回结构化 dict。
+    """用 DeepSeek 识别一页扫描图，返回结构化 dict。
 
     默认用全量转写提示（试卷入库）；传入 system/user 可改用其他提示
-    （如作答识别的小输出提示，节省 8 倍价的输出 token）。
+    （如作答识别的小输出提示，节省输出 token）。
     """
 
     def call() -> str:
-        resp = _vision_client.chat.completions.create(
-            model=settings.vision_model,
+        resp = _deepseek_client.chat.completions.create(
+            model=settings.deepseek_model,
             temperature=0,
             max_tokens=max_tokens,
             messages=[

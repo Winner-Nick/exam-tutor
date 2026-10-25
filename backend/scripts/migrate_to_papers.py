@@ -5,7 +5,7 @@
 2. 把 legacy 作业按 pdf_sha256 分组（同一份 PDF 共用一个试卷）；
 3. 每组建一个 paper：题目与正确答案取自组内题目最多的作业；复制源 PDF、
    页面图与 pages_raw.json；pages_raw 同时写入全局视觉缓存（后续提交/补传
-   命中缓存，零 Gemini 成本）；
+   命中缓存，零模型调用成本）；
 4. 组内每个作业改为 kind=submission，挂到该 paper 与"我自己"名下。
 
 没有任何题目的 legacy 作业（识别失败的旧记录）保持 legacy 不动，可手动删除。
