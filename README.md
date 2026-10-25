@@ -155,6 +155,14 @@ cd frontend && npm install && cd ..
 
 检查脚本依次执行 Python 编译、依赖一致性、后端 pytest、前端 Vitest 和生产构建。GitHub Actions 会对 main 与 Pull Request 运行相同检查。
 
+真实中转的端到端验收使用独立合成数据，需单独运行（会产生少量模型调用费用，不进入自动测试）：
+
+```bash
+.venv/bin/python -m backend.scripts.smoke_e2e --data-dir data/e2e-manual
+```
+
+该命令覆盖试卷识别、作答判分以及删除作答文件后的重跑，不会读取或修改现有学生数据。
+
 ## 备份与恢复
 
 ```bash
