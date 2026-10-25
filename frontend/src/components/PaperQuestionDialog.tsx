@@ -30,8 +30,10 @@ export function PaperQuestionDialog({ paperId, question, onClose }: { paperId: s
       correct_answer: answer.trim() || null,
       knowledge_point: knowledgePoint.trim() || null,
     }),
-    onSuccess: async ({ regraded }) => {
-      toast(regraded ? `题目已保存，并重判 ${regraded} 份作答` : '题目内容已保存')
+    onSuccess: async ({ regrade_pending, pending_sync }) => {
+      toast(regrade_pending
+        ? `题目已保存，${pending_sync ?? 0} 份历史作答将在后台同步`
+        : '题目内容已保存')
       await invalidateLearningData(qc)
       onClose()
     },

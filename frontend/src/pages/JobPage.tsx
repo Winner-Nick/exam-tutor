@@ -130,6 +130,7 @@ export function JobPage() {
     refetchInterval: (query) => {
       const job = query.state.data
       if (job?.status === 'processing') return sseDown ? 2500 : 5000
+      if (job?.sync_pending) return 3000
       if (job?.questions?.some((question) => question.explain_state === 'queued' || question.explain_state === 'generating')) return 3000
       return false
     },
@@ -210,6 +211,7 @@ export function JobPage() {
       {job.status === 'partial' && <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-100" role="alert"><p className="font-semibold">部分作答识别完成{job.failed_pages?.length ? `，失败页：${job.failed_pages.join('、')}` : ''}</p><p className="mt-1 text-sm">以下统计只包含已识别内容。可重试原文件，或明确接受不完整结果后人工核对。</p><div className="mt-3 flex flex-wrap gap-2"><button onClick={() => retry.mutate()} disabled={retry.isPending} className="btn-outline px-4">重试原文件</button><button onClick={() => setAcceptOpen(true)} className="btn-primary px-4">接受不完整结果</button></div></div>}
 
       {job.status === 'done' && job.accepted_partial && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-100" role="status">这份结果包含未识别页面{job.failed_pages?.length ? `（${job.failed_pages.join('、')}）` : ''}，正确率和错题汇总可能不完整，请人工核对。</div>}
+      {job.sync_pending && <div className="rounded-2xl border border-primary-200 bg-primary-50 p-3 text-sm text-primary-900 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-100" role="status">试卷内容已更新，正在后台同步这份作答；当前题目与统计可能暂时不是最新版本。</div>}
       <section className={`card space-y-3 p-4 ${chatActive ? 'hidden lg:block' : ''}`} aria-labelledby="submission-files-title">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="submission-files-title" className="font-semibold">作答文件</h2><span className="text-xs text-ink2">还可添加 {remaining} 个，共最多 12 个</span></div>
         {files.length > 0 && <ul className="divide-y divide-line/60">{files.map((file) => <li key={file.id} className="flex min-h-11 flex-wrap items-center gap-2 py-2 text-sm"><Icon name="file-text" size={15} className="text-dim" /><span className="min-w-0 flex-1 truncate">{file.filename || '未命名文件'}</span><span className="text-xs text-dim">{file.page_count ? `${file.page_count} 页` : ''}{file.status === 'error' ? ` · ${file.error || '识别失败'}` : ''}</span>{!isStudent && <button disabled={busy} onClick={() => setDeletingFile(file)} className="btn-ghost px-2 text-rose-700 dark:text-rose-300"><Icon name="trash" size={14} /> 删除</button>}</li>)}</ul>}

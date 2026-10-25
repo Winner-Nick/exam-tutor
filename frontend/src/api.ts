@@ -276,12 +276,12 @@ export const api = {
   addPaperQuestion: (id: string, body: PaperQuestionInput & { number: string }) =>
     request<PaperQuestion>(`/api/papers/${id}/questions`, { method: 'POST', body: JSON.stringify(body) }),
   updatePaperQuestion: (id: string, qid: string, body: PaperQuestionInput) =>
-    request<{ question: PaperQuestion; regraded?: number }>(`/api/papers/${id}/questions/${qid}`, {
+    request<{ question: PaperQuestion; regraded?: number; regrade_pending?: boolean; pending_sync?: number }>(`/api/papers/${id}/questions/${qid}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
   setPaperAnswer: (id: string, qid: string, correct_answer: string | null) =>
-    request<{ question: PaperQuestion; regraded: number }>(`/api/papers/${id}/questions/${qid}`, {
+    request<{ question: PaperQuestion; regraded: number; regrade_pending?: boolean; pending_sync?: number }>(`/api/papers/${id}/questions/${qid}`, {
       method: 'PATCH',
       body: JSON.stringify({ correct_answer }),
     }),

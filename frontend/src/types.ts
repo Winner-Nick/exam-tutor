@@ -107,7 +107,7 @@ export interface Job {
   student_id: number | null
   student_name: string | null
   paper_title: string | null
-  status: 'processing' | 'done' | 'error' | 'partial'
+  status: 'processing' | 'done' | 'error' | 'partial' | 'deleting'
   stage: string | null
   progress: Progress
   error: string | null
@@ -119,6 +119,7 @@ export interface Job {
   files?: ResourceFile[]
   failed_pages?: number[]
   accepted_partial?: boolean
+  sync_pending?: boolean
 }
 
 export interface Student {
@@ -152,7 +153,7 @@ export interface Paper {
   title: string | null
   subject?: string | null
   grade?: string | null
-  status: 'processing' | 'ready' | 'error' | 'partial'
+  status: 'processing' | 'ready' | 'error' | 'partial' | 'deleting'
   stage: string | null
   progress: Progress
   error: string | null

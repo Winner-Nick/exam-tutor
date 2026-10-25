@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest'
 import { api } from '../api'
 import type { PaperQuestion } from '../types'
 import { PaperQuestionDialog } from './PaperQuestionDialog'
+import { ToastProvider } from './Toast'
 
 function question(options: PaperQuestion['options']): PaperQuestion {
   return {
@@ -14,7 +15,7 @@ function question(options: PaperQuestion['options']): PaperQuestion {
 
 function renderDialog(value: PaperQuestion, onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(<QueryClientProvider client={qc}><PaperQuestionDialog paperId="p1" question={value} onClose={onClose} /></QueryClientProvider>)
+  render(<QueryClientProvider client={qc}><ToastProvider><PaperQuestionDialog paperId="p1" question={value} onClose={onClose} /></ToastProvider></QueryClientProvider>)
   return onClose
 }
 
@@ -59,4 +60,15 @@ it('enforces backend field lengths before saving', () => {
   expect(screen.getByRole('button', { name: '保存题目' })).toBeDisabled()
   fireEvent.click(screen.getByRole('button', { name: '保存题目' }))
   expect(update).not.toHaveBeenCalled()
+})
+
+it('reports background reconciliation instead of claiming it completed', async () => {
+  vi.spyOn(api, 'updatePaperQuestion').mockResolvedValue({
+    question: question(null), regraded: 2, regrade_pending: true, pending_sync: 2,
+  })
+  const onClose = renderDialog(question(null))
+  fireEvent.click(screen.getByRole('button', { name: '保存题目' }))
+
+  expect(await screen.findByText('题目已保存，2 份历史作答将在后台同步')).toBeInTheDocument()
+  await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
 })

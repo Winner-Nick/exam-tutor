@@ -52,8 +52,10 @@ function JobCard({ job, canDelete, onDelete }: { job: Job; canDelete: boolean; o
             </p>
             <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
               {job.status === 'processing' && <span className="badge bg-primary-50 text-primary-800 dark:bg-primary-900/30 dark:text-primary-200">{job.progress?.label || '处理中…'}</span>}
+              {job.status === 'deleting' && <span className="badge bg-surface-2 text-ink2">删除中…</span>}
               {job.status === 'error' && <span className="badge bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">处理失败，可重试</span>}
               {job.status === 'partial' && <span className="badge bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">部分识别，待确认</span>}
+              {job.sync_pending && <span className="badge bg-primary-50 text-primary-800 dark:bg-primary-900/30 dark:text-primary-200">后台同步中</span>}
               {finished && (
                 <>
                   {(stats.wrong ?? 0) > 0 && <span className="badge bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">错 {stats.wrong}</span>}
@@ -70,7 +72,7 @@ function JobCard({ job, canDelete, onDelete }: { job: Job; canDelete: boolean; o
           </div>
         </div>
       </Link>
-      {canDelete && job.status !== 'processing' && (
+      {canDelete && job.status !== 'processing' && job.status !== 'deleting' && (
         <button onClick={onDelete} aria-label={`删除 ${title}`} className="icon-btn absolute top-2 right-2 z-10 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/30">
           <Icon name="trash" size={16} />
         </button>
@@ -117,7 +119,7 @@ export function DashboardPage() {
   const jobs = useQuery({
     queryKey: ['jobs', { studentId: recordStudent, paperId: recordPaper, q: debouncedRecordQuery, page }],
     queryFn: ({ signal }) => api.listJobs({ studentId: recordStudent, paperId: recordPaper || null, q: debouncedRecordQuery, limit: PAGE_SIZE, offset: page * PAGE_SIZE }, { signal }),
-    refetchInterval: (query) => query.state.data?.jobs.some((job) => job.status === 'processing') ? 4000 : false,
+    refetchInterval: (query) => query.state.data?.jobs.some((job) => job.status === 'processing' || job.sync_pending) ? 4000 : false,
   })
 
   const readyPapers = (papers.data?.papers ?? []).filter(isUsablePaper)
