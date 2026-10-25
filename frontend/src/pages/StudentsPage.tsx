@@ -5,6 +5,7 @@ import { api, ApiError } from '../api'
 import { Icon } from '../components/Icon'
 import { useToast } from '../components/Toast'
 import type { Student } from '../types'
+import { invalidateStudentLearningData } from '../utils/query'
 
 /** 学生登录账号的创建/重置/注销（内联在学生卡片里）。 */
 function AccountPanel({ student, onClose }: { student: Student; onClose: () => void }) {
@@ -58,24 +59,30 @@ function AccountPanel({ student, onClose }: { student: Student; onClose: () => v
           <span className="ml-2 text-xs text-dim">输入新密码即可重置</span>
         </p>
       ) : (
-        <input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="登录用户名（2-32 位）"
-          maxLength={32}
-          autoComplete="off"
-          className="input bg-surface"
-        />
+        <label className="block text-xs font-medium text-ink2">
+          登录用户名
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="登录用户名（2-32 位）"
+            maxLength={32}
+            autoComplete="off"
+            className="input mt-1 bg-surface"
+          />
+        </label>
       )}
-      <input
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        type="password"
-        placeholder={hasAccount ? '新密码（至少 8 位）' : '初始密码（至少 8 位）'}
-        maxLength={128}
-        autoComplete="new-password"
-        className="input bg-surface"
-      />
+      <label className="block text-xs font-medium text-ink2">
+        {hasAccount ? '新密码' : '初始密码'}
+        <input
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          type="password"
+          placeholder={hasAccount ? '新密码（至少 8 位）' : '初始密码（至少 8 位）'}
+          maxLength={128}
+          autoComplete="new-password"
+          className="input mt-1 bg-surface"
+        />
+      </label>
       <div className="flex flex-wrap items-center gap-2 pt-1">
         <button
           type="submit"
@@ -116,7 +123,7 @@ function StudentRow({ student }: { student: Student }) {
     mutationFn: () => api.renameStudent(student.id, name.trim()),
     onSuccess: () => {
       setEditing(false)
-      qc.invalidateQueries({ queryKey: ['students'] })
+      void invalidateStudentLearningData(qc)
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : '修改失败', 'error'),
   })

@@ -52,6 +52,7 @@ export function PaperPage() {
   const navigate = useNavigate()
   const answersRef = useRef<HTMLInputElement>(null)
   const uploadController = useRef<AbortController | null>(null)
+  const compressionGeneration = useRef(0)
   const [showPages, setShowPages] = useState(false)
   const [picking, setPicking] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -66,29 +67,37 @@ export function PaperPage() {
 
   const paperQ = useQuery({
     queryKey: ['paper', paperId],
-    queryFn: () => api.getPaper(paperId!),
+    queryFn: ({ signal }) => api.getPaper(paperId!, { signal }),
     enabled: !!paperId,
     refetchInterval: (query) => query.state.data?.status === 'processing' ? 3000 : false,
   })
 
   const addAnswers = useMutation({
-    mutationFn: (files: File[]) => {
+    mutationFn: (variables: { files: File[]; paperId: string; generation: number }) => {
       const controller = new AbortController()
       uploadController.current = controller
-      return api.addPaperFiles(paperId!, files, 'answers', { signal: controller.signal, onProgress: setUploadPct })
+      return api.addPaperFiles(variables.paperId, variables.files, 'answers', { signal: controller.signal, onProgress: setUploadPct })
     },
-    onSettled: () => {
+    onSettled: (_data, _error, variables) => {
+      if (variables.generation !== compressionGeneration.current) return
       uploadController.current = null
       setUploadPct(null)
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, variables) => {
+      if (variables.generation !== compressionGeneration.current) return
       setPendingFiles([])
       toast('答案文件已上传，正在重新汇总')
       await invalidateLearningData(qc)
     },
-    onError: (error) => {
-      if (error instanceof ApiError && error.code === 'abort') toast('已取消上传，补传文件仍保留')
-      else toast(error instanceof ApiError ? error.message : '上传失败，请重试', 'error')
+    onError: (error, variables) => {
+      if (error instanceof ApiError && ['abort', 'timeout', 'network'].includes(error.code)) {
+        void Promise.all([
+          qc.invalidateQueries({ queryKey: ['papers'] }),
+          qc.invalidateQueries({ queryKey: ['paper', variables.paperId] }),
+        ])
+      }
+      if (variables.generation !== compressionGeneration.current) return
+      toast(error instanceof ApiError ? error.message : '上传失败，请重试', 'error')
     },
   })
   useUploadGuard(addAnswers.isPending || picking)
@@ -146,7 +155,19 @@ export function PaperPage() {
     onError: (error) => toast(error instanceof ApiError ? error.message : '知识点补全失败', 'error'),
   })
 
-  useEffect(() => () => uploadController.current?.abort(), [])
+  useEffect(() => {
+    compressionGeneration.current += 1
+    uploadController.current?.abort()
+    uploadController.current = null
+    addAnswers.reset()
+    setPicking(false)
+    setPendingFiles([])
+    setUploadPct(null)
+  }, [paperId, addAnswers.reset])
+  useEffect(() => () => {
+    compressionGeneration.current += 1
+    uploadController.current?.abort()
+  }, [])
 
   if (paperQ.isPending) return <div className="flex justify-center py-20"><Spinner className="h-8 w-8" /></div>
   if (paperQ.isError) return <div className="mx-auto max-w-xl"><ErrorState error={paperQ.error} onRetry={() => void paperQ.refetch()} /><Link to="/papers" className="btn-outline mt-4 px-4">返回试卷库</Link></div>
@@ -161,13 +182,15 @@ export function PaperPage() {
 
   async function selectFiles(list: FileList | null) {
     if (busy || remaining === 0) return
+    const generation = compressionGeneration.current
     setPicking(true)
     try {
       const result = await compressPicked(list, 30, files.length + pendingFiles.length)
+      if (generation !== compressionGeneration.current) return
       if (result.dropped > 0) toast(`整份试卷最多 30 个文件，已忽略 ${result.dropped} 个`, 'error')
       if (result.files.length) setPendingFiles((old) => [...old, ...result.files])
     } finally {
-      setPicking(false)
+      if (generation === compressionGeneration.current) setPicking(false)
     }
   }
 
@@ -213,7 +236,7 @@ export function PaperPage() {
       <section className="card space-y-3 p-4" aria-labelledby="paper-files-title">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="paper-files-title" className="font-semibold">源文件</h2><span className="text-xs text-ink2">还可添加 {remaining} 个，整卷最多 30 个</span></div>
         {files.length > 0 && <ul className="divide-y divide-line/60">{files.map((file) => <li key={file.id} className="flex min-h-11 flex-wrap items-center gap-2 py-2 text-sm"><Icon name="file-text" size={15} className="text-dim" /><span className="min-w-0 flex-1 truncate">{file.filename || '未命名文件'}</span><span className="text-xs text-dim">{file.page_count ? `${file.page_count} 页` : ''}{file.status === 'error' ? ` · ${file.error || '识别失败'}` : ''}</span><button onClick={() => setDeletingFile(file)} className="btn-ghost px-2 text-rose-700 dark:text-rose-300" aria-label={`删除文件 ${file.filename || file.id}`}><Icon name="trash" size={14} /> 删除</button></li>)}</ul>}
-        {pendingFiles.length > 0 && <><ul className="flex flex-wrap gap-2">{pendingFiles.map((file, index) => <li key={`${file.name}-${index}`} className="badge min-h-9 bg-surface-2 text-ink2"><span className="max-w-44 truncate">{file.name}</span><button disabled={busy} onClick={() => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} className="flex h-8 w-8 items-center justify-center" aria-label={`移除 ${file.name}`}><Icon name="x" size={12} /></button></li>)}</ul><div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => addAnswers.mutate(pendingFiles)} className="btn-primary px-4">{addAnswers.isPending ? uploadPct != null ? `上传中 ${uploadPct}%` : '等待服务器接收…' : picking ? '正在处理…' : `上传 ${pendingFiles.length} 个答案文件`}</button>{addAnswers.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消上传</button>}</div></>}
+        {pendingFiles.length > 0 && <><ul className="flex flex-wrap gap-2">{pendingFiles.map((file, index) => <li key={`${file.name}-${index}`} className="badge min-h-9 bg-surface-2 text-ink2"><span className="max-w-44 truncate">{file.name}</span><button disabled={busy} onClick={() => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} className="flex h-8 w-8 items-center justify-center" aria-label={`移除 ${file.name}`}><Icon name="x" size={12} /></button></li>)}</ul><div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => paperId && addAnswers.mutate({ files: pendingFiles, paperId, generation: compressionGeneration.current })} className="btn-primary px-4">{addAnswers.isPending ? uploadPct != null ? `上传中 ${uploadPct}%` : '等待服务器接收…' : picking ? '正在处理…' : `上传 ${pendingFiles.length} 个答案文件`}</button>{addAnswers.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消上传</button>}</div></>}
         {files.length === 0 && pendingFiles.length === 0 && <p className="text-sm text-dim">手动建卷暂无源文件，可直接在下方逐题录入。</p>}
       </section>
 

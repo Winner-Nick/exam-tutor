@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useDeferredValue, useState } from 'react'
+import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { EmptyState } from '../components/EmptyState'
@@ -9,8 +9,9 @@ import { Markdown } from '../components/Markdown'
 import { PageHeader } from '../components/PageHeader'
 import { StudentFilter } from '../components/StudentFilter'
 import { useToast } from '../components/Toast'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import type { MistakeQuestion } from '../types'
-import { invalidateLearningData } from '../utils/query'
+import { invalidateReviewData } from '../utils/query'
 
 type ReviewFilter = 'all' | 'pending' | 'mastered' | 'due'
 type ReviewBody = { action: 'attempt' | 'mastered' | 'reopen'; answer?: string; result?: 'correct' | 'wrong' }
@@ -33,7 +34,7 @@ function MistakeCard({ question }: { question: MistakeQuestion }) {
     onSuccess: async (_, body) => {
       toast(body.action === 'mastered' ? '已标记为掌握' : body.action === 'reopen' ? '已恢复到待复习' : body.result === 'correct' ? '已记录答对，下次复习已按间隔排期' : '已记录答错，已重新进入近期复习')
       if (body.action === 'attempt') setAnswer('')
-      await invalidateLearningData(qc)
+      await invalidateReviewData(qc)
     },
     onError: (error) => toast(error instanceof ApiError ? error.message : '复习操作失败，请重试', 'error'),
   })
@@ -107,24 +108,24 @@ export function MistakesPage() {
   const review: ReviewFilter = reviewParam === 'pending' || reviewParam === 'mastered' || reviewParam === 'due' ? reviewParam : 'all'
   const days = Number(params.get('days')) || undefined
   const keyword = params.get('q') ?? ''
-  const deferredKeyword = useDeferredValue(keyword)
+  const debouncedKeyword = useDebouncedValue(keyword)
 
   const query = useQuery({
-    queryKey: ['mistakes', { studentId, paperId, review, q: deferredKeyword, days }],
-    queryFn: () => api.mistakes({ studentId, paperId: paperId || null, review, q: deferredKeyword, days }),
+    queryKey: ['mistakes', { studentId, paperId, review, q: debouncedKeyword, days }],
+    queryFn: ({ signal }) => api.mistakes({ studentId, paperId: paperId || null, review, q: debouncedKeyword, days }, { signal }),
   })
-  const papers = useQuery({ queryKey: ['papers', 'options'], queryFn: () => api.listPapers({ limit: 100 }) })
+  const papers = useQuery({ queryKey: ['papers', 'options'], queryFn: ({ signal }) => api.listPapers({ limit: 100 }, { signal }) })
   const groups = query.data?.groups ?? []
   const rows = groups.flatMap((group) => group.questions)
   const filtered = !!(studentId || paperId || review !== 'all' || days || keyword)
 
-  function update(key: string, value: string) {
+  function update(key: string, value: string, replace = false) {
     setParams((old) => {
       const next = new URLSearchParams(old)
       if (value) next.set(key, value)
       else next.delete(key)
       return next
-    })
+    }, { replace })
   }
 
   function exportCsv() {
@@ -163,7 +164,7 @@ export function MistakesPage() {
           {([{ key: 'all', label: '全部' }, { key: 'pending', label: '待复习' }, { key: 'mastered', label: '已掌握' }, { key: 'due', label: '今日到期' }] as const).map((item) => <button key={item.key} aria-pressed={review === item.key} onClick={() => update('review', item.key === 'all' ? '' : item.key)} className={`chip ${review === item.key ? 'chip-active' : ''}`}>{item.label}</button>)}
         </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <label><span className="mb-1 block text-xs font-medium text-ink2">关键词</span><input value={keyword} onChange={(event) => update('q', event.target.value)} className="input" placeholder="题干、答案或知识点" /></label>
+          <label><span className="mb-1 block text-xs font-medium text-ink2">关键词</span><input value={keyword} onChange={(event) => update('q', event.target.value, true)} className="input" placeholder="题干、答案或知识点" /></label>
           <label><span className="mb-1 block text-xs font-medium text-ink2">学生</span><StudentFilter value={studentId} onChange={(value) => update('student_id', value ? String(value) : '')} /></label>
           <label><span className="mb-1 block text-xs font-medium text-ink2">试卷</span><select value={paperId} onChange={(event) => update('paper_id', event.target.value)} className="input"><option value="">全部试卷</option>{(papers.data?.papers ?? []).map((paper) => <option key={paper.id} value={paper.id}>{paper.title || '试卷'}</option>)}</select></label>
           <label><span className="mb-1 block text-xs font-medium text-ink2">批改日期</span><select value={days ?? ''} onChange={(event) => update('days', event.target.value)} className="input"><option value="">全部时间</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option><option value="365">近一年</option></select></label>

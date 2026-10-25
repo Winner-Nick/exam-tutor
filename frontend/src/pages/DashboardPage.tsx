@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useDeferredValue, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -12,13 +12,19 @@ import { Pagination } from '../components/Pagination'
 import { Spinner } from '../components/Spinner'
 import { StudentFilter } from '../components/StudentFilter'
 import { useToast } from '../components/Toast'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey'
 import { useUploadGuard } from '../hooks/useUploadGuard'
-import type { Job, User } from '../types'
+import type { Job, Paper, User } from '../types'
 import { compressPicked } from '../utils/compressImage'
 import { emptyPageTarget } from '../utils/pagination'
-import { invalidateLearningData } from '../utils/query'
+import { invalidateCreatedSubmission, invalidateLearningData } from '../utils/query'
 
 const PAGE_SIZE = 9
+
+function isUsablePaper(paper: Paper | undefined): paper is Paper {
+  return paper?.status === 'ready' && paper.question_count > 0
+}
 
 function JobCard({ job, canDelete, onDelete }: { job: Job; canDelete: boolean; onDelete: () => void }) {
   const title = job.paper_title || job.meta?.title || job.filename || '试卷'
@@ -93,20 +99,44 @@ export function DashboardPage() {
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [usePaperFiles, setUsePaperFiles] = useState(false)
   const [deleting, setDeleting] = useState<Job | null>(null)
+  const [createdJobId, setCreatedJobId] = useState<string | null>(null)
+  const [paperSearch, setPaperSearch] = useState('')
 
   const recordStudent = Number(params.get('student')) || null
   const recordPaper = params.get('paper') ?? ''
   const recordQuery = params.get('q') ?? ''
-  const deferredQuery = useDeferredValue(recordQuery)
+  const debouncedRecordQuery = useDebouncedValue(recordQuery)
+  const debouncedPaperSearch = useDebouncedValue(paperSearch)
   const page = Math.max(0, Number(params.get('page')) || 0)
 
   const students = useQuery({ queryKey: ['students'], queryFn: api.listStudents })
-  const papers = useQuery({ queryKey: ['papers', 'options'], queryFn: () => api.listPapers({ limit: 100 }) })
+  const papers = useQuery({
+    queryKey: ['papers', 'options', { q: debouncedPaperSearch }],
+    queryFn: ({ signal }) => api.listPapers({ q: debouncedPaperSearch, limit: 200 }, { signal }),
+  })
   const jobs = useQuery({
-    queryKey: ['jobs', { studentId: recordStudent, paperId: recordPaper, q: deferredQuery, page }],
-    queryFn: () => api.listJobs({ studentId: recordStudent, paperId: recordPaper || null, q: deferredQuery, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+    queryKey: ['jobs', { studentId: recordStudent, paperId: recordPaper, q: debouncedRecordQuery, page }],
+    queryFn: ({ signal }) => api.listJobs({ studentId: recordStudent, paperId: recordPaper || null, q: debouncedRecordQuery, limit: PAGE_SIZE, offset: page * PAGE_SIZE }, { signal }),
     refetchInterval: (query) => query.state.data?.jobs.some((job) => job.status === 'processing') ? 4000 : false,
   })
+
+  const readyPapers = (papers.data?.papers ?? []).filter(isUsablePaper)
+  const listedPaper = paperId ? papers.data?.papers.find((paper) => paper.id === paperId) : undefined
+  const selectedPaperQuery = useQuery({
+    queryKey: ['paper', paperId],
+    queryFn: ({ signal }) => api.getPaper(paperId, { signal }),
+    enabled: !!paperId && !listedPaper,
+  })
+  const detailedPaper = selectedPaperQuery.data?.id === paperId ? selectedPaperQuery.data : undefined
+  const selectedPaper = listedPaper
+    ? isUsablePaper(listedPaper) ? listedPaper : undefined
+    : isUsablePaper(detailedPaper) ? detailedPaper : undefined
+  const selectablePapers = selectedPaper && !readyPapers.some((paper) => paper.id === selectedPaper.id)
+    ? [selectedPaper, ...readyPapers]
+    : readyPapers
+  const { key: idempotencyKey, regenerate: regenerateIdempotencyKey } = useIdempotencyKey([
+    paperId, studentId, files, usePaperFiles,
+  ])
 
   useEffect(() => {
     if (studentId == null && students.data) {
@@ -115,36 +145,53 @@ export function DashboardPage() {
     }
   }, [students.data, studentId, recordStudent])
   useEffect(() => {
-    if (recordPaper && papers.data?.papers.some((paper) => paper.id === recordPaper)) setPaperId(recordPaper)
-  }, [papers.data, recordPaper])
+    if (recordPaper) setPaperId(recordPaper)
+  }, [recordPaper])
+  useEffect(() => {
+    if (!paperId) return
+    const invalidListed = !!listedPaper && !isUsablePaper(listedPaper)
+    const invalidDetail = !!detailedPaper && !isUsablePaper(detailedPaper)
+    if (invalidListed || invalidDetail || (selectedPaperQuery.isError && !listedPaper)) {
+      setPaperId('')
+      setUsePaperFiles(false)
+    }
+  }, [paperId, listedPaper, detailedPaper, selectedPaperQuery.isError])
   useEffect(() => () => uploadController.current?.abort(), [])
 
   const submit = useMutation({
-    mutationFn: (variables: { paperId: string; studentId: number; files: File[]; usePaperFiles: boolean }) => {
+    mutationFn: (variables: { paperId: string; studentId: number; files: File[]; usePaperFiles: boolean; idempotencyKey: string }) => {
       const controller = new AbortController()
       uploadController.current = controller
       return api.createSubmission(variables.paperId, variables.studentId, variables.files, variables.usePaperFiles, {
         signal: controller.signal,
         onProgress: setUploadPct,
+        idempotencyKey: variables.idempotencyKey,
       })
     },
     onSettled: () => {
       uploadController.current = null
       setUploadPct(null)
     },
-    onSuccess: async ({ job_id }) => {
+    onSuccess: ({ job_id }) => {
       setFiles([])
       setUsePaperFiles(false)
-      await invalidateLearningData(qc)
-      navigate(`/jobs/${job_id}`)
+      regenerateIdempotencyKey()
+      setCreatedJobId(job_id)
+      void invalidateCreatedSubmission(qc)
     },
     onError: (error) => {
-      if (error instanceof ApiError && error.code === 'abort') toast('已取消上传，已选文件仍保留')
-      else toast(error instanceof ApiError ? error.message : '提交失败，请检查网络后重试', 'error')
+      toast(error instanceof ApiError ? error.message : '提交失败，请检查网络后重试', 'error')
+      if (error instanceof ApiError && ['abort', 'timeout', 'network'].includes(error.code)) {
+        void invalidateCreatedSubmission(qc)
+      }
     },
   })
 
-  useUploadGuard(submit.isPending || picking !== null)
+  useEffect(() => {
+    if (createdJobId && submit.isSuccess) navigate(`/jobs/${createdJobId}`)
+  }, [createdJobId, submit.isSuccess, navigate])
+
+  useUploadGuard((submit.isPending || picking !== null) && !createdJobId)
 
   const del = useMutation({
     mutationFn: api.deleteJob,
@@ -157,11 +204,9 @@ export function DashboardPage() {
   })
 
   const busy = submit.isPending || picking !== null
-  const readyPapers = (papers.data?.papers ?? []).filter((paper) => paper.status === 'ready' && paper.question_count > 0)
-  const selectedPaper = readyPapers.find((paper) => paper.id === paperId)
   const canReusePaperFiles = !!selectedPaper?.page_count
   const remaining = Math.max(0, 12 - files.length)
-  const canSubmit = !!paperId && studentId != null && ((usePaperFiles && canReusePaperFiles) || files.length > 0) && !busy
+  const canSubmit = !!selectedPaper && studentId != null && ((usePaperFiles && canReusePaperFiles) || files.length > 0) && !busy
 
   async function addFiles(list: FileList | null) {
     if (busy || remaining === 0) return
@@ -175,14 +220,14 @@ export function DashboardPage() {
     }
   }
 
-  function updateFilter(key: string, value: string) {
+  function updateFilter(key: string, value: string, replace = false) {
     setParams((old) => {
       const next = new URLSearchParams(old)
       if (value) next.set(key, value)
       else next.delete(key)
       next.delete('page')
       return next
-    })
+    }, { replace })
   }
 
   const total = jobs.data ? jobs.data.total ?? jobs.data.jobs.length : 0
@@ -225,17 +270,19 @@ export function DashboardPage() {
 
         <div>
           <p className="mb-2.5 flex items-center gap-2 text-sm font-medium"><span className={stepBadge}>{isStudent ? 1 : 2}</span> 做的哪份题？</p>
-          {papers.isPending ? <div className="skeleton h-11 max-w-md" /> : papers.isError ? (
+          <label className="mb-2 block max-w-md"><span className="sr-only">搜索可选试卷</span><input value={paperSearch} onChange={(event) => setPaperSearch(event.target.value)} className="input" placeholder="搜索可选试卷名称" /></label>
+          {papers.isPending && !selectedPaper ? <div className="skeleton h-11 max-w-md" /> : papers.isError && !selectedPaper ? (
             <p className="text-sm text-rose-700 dark:text-rose-300" role="alert">试卷列表加载失败 <button onClick={() => void papers.refetch()} className="ml-2 underline">重试</button></p>
-          ) : readyPapers.length === 0 ? (
-            <p className="text-sm text-ink2">{isStudent ? '还没有可用试卷，请告诉老师先录入并核对题目。' : <>还没有可用试卷，请先 <Link to="/papers" className="text-primary-700 underline dark:text-primary-300">录入试卷并补齐题目</Link>。部分识别试卷需先明确接受。</>}</p>
+          ) : selectablePapers.length === 0 && !paperId ? (
+            <p className="text-sm text-ink2">{paperSearch ? '没有匹配的可用试卷，请更换关键词。' : isStudent ? '还没有可用试卷，请告诉老师先录入并核对题目。' : <>还没有可用试卷，请先 <Link to="/papers" className="text-primary-700 underline dark:text-primary-300">录入试卷并补齐题目</Link>。部分识别试卷需先明确接受。</>}</p>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
               <label className="min-w-0 max-w-full flex-1 sm:max-w-md">
                 <span className="sr-only">选择试卷</span>
                 <select value={paperId} disabled={busy} onChange={(event) => setPaperId(event.target.value)} className="input cursor-pointer">
                   <option value="">— 选择试卷 —</option>
-                  {readyPapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title || '试卷'}（{paper.question_count} 题{paper.question_count - paper.answered_count > 0 ? `，${paper.question_count - paper.answered_count} 题缺答案` : ''}）</option>)}
+                  {paperId && !selectedPaper && <option value={paperId}>正在核对所选试卷…</option>}
+                  {selectablePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title || '试卷'}（{paper.question_count} 题{paper.question_count - paper.answered_count > 0 ? `，${paper.question_count - paper.answered_count} 题缺答案` : ''}）</option>)}
                 </select>
               </label>
               {!isStudent && <Link to="/papers" className="flex min-h-11 items-center gap-0.5 text-sm text-primary-700 hover:underline dark:text-primary-300"><Icon name="plus" size={14} /> 新试卷</Link>}
@@ -274,7 +321,7 @@ export function DashboardPage() {
 
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => studentId != null && submit.mutate({ paperId, studentId, files, usePaperFiles })}
+            onClick={() => selectedPaper && studentId != null && submit.mutate({ paperId: selectedPaper.id, studentId, files, usePaperFiles, idempotencyKey })}
             disabled={!canSubmit}
             className="btn-primary min-w-40 px-8 text-base"
           >
@@ -286,16 +333,18 @@ export function DashboardPage() {
       </section>
 
       <section id="recent-jobs" className="space-y-4" aria-labelledby="recent-jobs-title">
-        <PageHeader title="最近批改" actions={<Link to="/guide#grading" className="text-sm text-primary-700 hover:underline dark:text-primary-300">查看批改帮助</Link>} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="recent-jobs-title" className="font-serif text-2xl font-bold text-ink">最近批改</h2>
+          <Link to="/guide#grading" className="text-sm text-primary-700 hover:underline dark:text-primary-300">查看批改帮助</Link>
+        </div>
         <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-          <label><span className="sr-only">搜索批改记录</span><input value={recordQuery} onChange={(event) => updateFilter('q', event.target.value)} className="input" placeholder="搜索试卷或记录" /></label>
+          <label><span className="sr-only">搜索批改记录</span><input value={recordQuery} onChange={(event) => updateFilter('q', event.target.value, true)} className="input" placeholder="搜索试卷或记录" /></label>
           <StudentFilter value={recordStudent} onChange={(value) => updateFilter('student', value ? String(value) : '')} />
           <label><span className="sr-only">按试卷筛选</span><select value={recordPaper} onChange={(event) => updateFilter('paper', event.target.value)} className="input w-full sm:w-44">
             <option value="">全部试卷</option>
             {(papers.data?.papers ?? []).map((paper) => <option key={paper.id} value={paper.id}>{paper.title || '试卷'}</option>)}
           </select></label>
         </div>
-        <h2 id="recent-jobs-title" className="sr-only">批改记录列表</h2>
         {jobs.isPending ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-28 rounded-2xl" />)}</div>
         ) : jobs.isError ? (

@@ -8,10 +8,19 @@ import { Markdown } from './Markdown'
 import { Spinner } from './Spinner'
 import { useToast } from './Toast'
 
+interface ChatEntry extends ChatMessage {
+  id?: string
+}
+
+interface ChatCache {
+  messages: ChatEntry[]
+}
+
 interface AskVariables {
   jobId: string
   qid: string | null
   text: string
+  optimisticId: string
 }
 
 export function ChatPanel({
@@ -30,11 +39,13 @@ export function ChatPanel({
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const listRef = useRef<HTMLDivElement>(null)
   const composing = useRef(false)
+  const inFlight = useRef(false)
+  const nextOptimisticId = useRef(0)
   const input = drafts[scope] ?? ''
 
-  const chat = useQuery({
+  const chat = useQuery<ChatCache>({
     queryKey: ['chat', jobId, qid],
-    queryFn: () => api.getChat(jobId, qid),
+    queryFn: ({ signal }) => api.getChat(jobId, qid, { signal }),
   })
 
   const ask = useMutation({
@@ -42,27 +53,32 @@ export function ChatPanel({
     onMutate: async (variables) => {
       const key = ['chat', variables.jobId, variables.qid]
       await qc.cancelQueries({ queryKey: key })
-      const previous = qc.getQueryData<{ messages: ChatMessage[] }>(key)
-      qc.setQueryData<{ messages: ChatMessage[] }>(key, (old) => ({
-        messages: [...(old?.messages ?? []), { role: 'user', content: variables.text }],
+      qc.setQueryData<ChatCache>(key, (old) => ({
+        messages: [...(old?.messages ?? []), { id: variables.optimisticId, role: 'user', content: variables.text }],
       }))
-      return { previous }
     },
     onSuccess: ({ answer }, variables) => {
-      qc.setQueryData<{ messages: ChatMessage[] }>(['chat', variables.jobId, variables.qid], (old) => ({
-        messages: [...(old?.messages ?? []), { role: 'assistant', content: answer }],
+      qc.setQueryData<ChatCache>(['chat', variables.jobId, variables.qid], (old) => ({
+        messages: [...(old?.messages ?? []), { id: `${variables.optimisticId}:answer`, role: 'assistant', content: answer }],
       }))
     },
-    onError: (error, variables, context) => {
-      qc.setQueryData(['chat', variables.jobId, variables.qid], context?.previous)
+    onError: (error, variables) => {
+      qc.setQueryData<ChatCache>(['chat', variables.jobId, variables.qid], (old) => old ? {
+        messages: old.messages.filter((message) => message.id !== variables.optimisticId),
+      } : old)
       const failedScope = `${variables.jobId}:${variables.qid ?? 'paper'}`
       setDrafts((old) => ({ ...old, [failedScope]: old[failedScope] || variables.text }))
       toast(error instanceof ApiError ? error.message : '提问失败，请检查网络后重试', 'error')
     },
+    onSettled: () => {
+      inFlight.current = false
+    },
   })
 
   const currentPending = ask.isPending && ask.variables?.jobId === jobId && ask.variables.qid === qid
+  const otherScopePending = ask.isPending && !currentPending
   const currentError = ask.isError && ask.variables?.jobId === jobId && ask.variables.qid === qid ? ask.error : null
+  const currentSuccess = ask.isSuccess && ask.variables?.jobId === jobId && ask.variables.qid === qid
 
   useEffect(() => {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -73,11 +89,18 @@ export function ChatPanel({
     setDrafts((old) => ({ ...old, [scope]: value }))
   }
 
+  function send(variables: AskVariables) {
+    if (inFlight.current || ask.isPending) return
+    inFlight.current = true
+    ask.mutate(variables)
+  }
+
   function submit() {
     const text = input.trim()
-    if (!text || currentPending || composing.current) return
+    if (!text || inFlight.current || ask.isPending || composing.current) return
     setInput('')
-    ask.mutate({ jobId, qid, text })
+    nextOptimisticId.current += 1
+    send({ jobId, qid, text, optimisticId: `chat-temp-${Date.now()}-${nextOptimisticId.current}` })
   }
 
   const messages = chat.data?.messages ?? []
@@ -124,7 +147,7 @@ export function ChatPanel({
               </div>
             )}
             {messages.map((message, index) => (
-              <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div key={message.id ?? `${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[88%] rounded-2xl px-3 py-2 ${message.role === 'user' ? 'rounded-br-sm bg-primary-700 text-white' : 'rounded-bl-sm bg-surface-2'}`}>
                   {message.role === 'user' ? <p className="text-sm whitespace-pre-wrap">{message.content}</p> : <Markdown text={message.content} />}
                 </div>
@@ -142,10 +165,11 @@ export function ChatPanel({
             AI 家教思考中…
           </div>
         )}
+        {otherScopePending && <p className="text-xs text-ink2" role="status">另一段对话正在回答，完成后可继续提问。</p>}
         {currentError && (
           <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-900/20 dark:text-rose-200" role="alert">
             <p>{currentError instanceof ApiError ? currentError.message : '提问失败，请重试'}</p>
-            <button className="btn-outline mt-2 px-3" onClick={() => ask.variables && ask.mutate(ask.variables)}>重试这次提问</button>
+            <button className="btn-outline mt-2 px-3" onClick={() => ask.variables && send(ask.variables)}>重试这次提问</button>
           </div>
         )}
       </div>
@@ -168,11 +192,11 @@ export function ChatPanel({
           placeholder={question ? `针对第 ${question.number} 题提问…` : '输入问题…'}
           className="input thin-scroll max-h-28 flex-1 resize-none"
         />
-        <button onClick={submit} disabled={!input.trim() || currentPending} className="btn-primary h-11 w-11" aria-label="发送问题">
+        <button onClick={submit} disabled={!input.trim() || ask.isPending} className="btn-primary h-11 w-11" aria-label="发送问题">
           <Icon name="send" size={16} />
         </button>
       </div>
-      <p className="sr-only" aria-live="polite">{currentPending ? '正在等待 AI 回答' : ask.isSuccess ? '回答已收到' : ''}</p>
+      <p className="sr-only" aria-live="polite">{currentPending ? '正在等待 AI 回答' : currentSuccess ? '回答已收到' : ''}</p>
     </div>
   )
 }

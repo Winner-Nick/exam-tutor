@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError, UNAUTHORIZED_EVENT } from './api'
 import { AppShell } from './components/AppShell'
 import { ErrorState } from './components/ErrorState'
@@ -47,7 +47,7 @@ function SessionEvents() {
     window.addEventListener(UNAUTHORIZED_EVENT, unauthorized)
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, unauthorized)
   }, [location.hash, location.pathname, location.search, navigate, qc])
-  return null
+  return <Outlet />
 }
 
 function Protected() {
@@ -83,31 +83,41 @@ function TeacherOnly() {
   return <Outlet />
 }
 
+const router = createBrowserRouter([
+  {
+    element: <SessionEvents />,
+    children: [
+      { path: '/login', element: <LoginPage /> },
+      { path: '/download', element: <DownloadPage /> },
+      {
+        element: <Protected />,
+        children: [
+          { path: '/', element: <DashboardPage /> },
+          { path: '/jobs/:jobId', element: <JobPage /> },
+          {
+            element: <TeacherOnly />,
+            children: [
+              { path: '/papers', element: <PapersPage /> },
+              { path: '/papers/:paperId', element: <PaperPage /> },
+              { path: '/students', element: <StudentsPage /> },
+            ],
+          },
+          { path: '/mistakes', element: <MistakesPage /> },
+          { path: '/guide', element: <GuidePage /> },
+          { path: '/stats', element: <StatsPage /> },
+          { path: '/settings', element: <SettingsPage /> },
+        ],
+      },
+      { path: '*', element: <Navigate to="/" replace /> },
+    ],
+  },
+])
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <BrowserRouter>
-          <SessionEvents />
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/download" element={<DownloadPage />} />
-            <Route element={<Protected />}>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/jobs/:jobId" element={<JobPage />} />
-              <Route element={<TeacherOnly />}>
-                <Route path="/papers" element={<PapersPage />} />
-                <Route path="/papers/:paperId" element={<PaperPage />} />
-                <Route path="/students" element={<StudentsPage />} />
-              </Route>
-              <Route path="/mistakes" element={<MistakesPage />} />
-              <Route path="/guide" element={<GuidePage />} />
-              <Route path="/stats" element={<StatsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
+        <RouterProvider router={router} />
       </ToastProvider>
     </QueryClientProvider>
   )

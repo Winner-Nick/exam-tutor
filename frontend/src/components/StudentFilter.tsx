@@ -14,6 +14,7 @@ export function StudentFilter({
   if (list.length <= 1) return null
   return (
     <select
+      aria-label="按学生筛选"
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
       className="input w-auto cursor-pointer px-3 py-1.5"

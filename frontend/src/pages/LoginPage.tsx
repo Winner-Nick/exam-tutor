@@ -65,13 +65,12 @@ export function LoginPage() {
         </div>
 
         <form onSubmit={submit} className="card space-y-3 p-6">
-          <div className="mb-4 grid grid-cols-2 rounded-xl bg-surface-2 p-1 text-sm font-medium" role="tablist" aria-label="登录或注册">
+          <div className="mb-4 grid grid-cols-2 rounded-xl bg-surface-2 p-1 text-sm font-medium" role="group" aria-label="登录或注册">
             {(['login', 'register'] as const).map((key) => (
               <button
                 key={key}
                 type="button"
-                role="tab"
-                aria-selected={mode === key}
+                aria-pressed={mode === key}
                 onClick={() => {
                   setMode(key)
                   setError('')

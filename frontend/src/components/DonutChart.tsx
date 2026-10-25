@@ -12,7 +12,14 @@ export function DonutChart({
   const r = size / 2 - 5
   const c = 2 * Math.PI * r
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className="-rotate-90"
+      role="img"
+      aria-label={total > 0 ? `正确率 ${Math.round(pct * 100)}%，答对 ${correct} 题，共 ${total} 题` : '暂无客观题判分数据'}
+    >
       <circle
         cx={size / 2}
         cy={size / 2}

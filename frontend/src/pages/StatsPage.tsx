@@ -44,7 +44,7 @@ export function StatsPage() {
   const user = useOutletContext<User>()
   const [studentId, setStudentId] = useState<number | null>(null)
   const [days, setDays] = useState(30)
-  const query = useQuery({ queryKey: ['overview', { studentId, days }], queryFn: () => api.overview(studentId, days) })
+  const query = useQuery({ queryKey: ['overview', { studentId, days }], queryFn: ({ signal }) => api.overview(studentId, days, { signal }) })
 
   if (query.isPending) return <div className="space-y-4">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-44 rounded-2xl" />)}</div>
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />

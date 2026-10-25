@@ -54,7 +54,7 @@ it('returns Dashboard to a valid page after deleting the last item on the tail p
   await user.click(screen.getByRole('button', { name: '确认删除' }))
 
   await waitFor(() => expect(router.state.location.search).toBe('?page=0'))
-  await waitFor(() => expect(listJobs).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 })))
+  await waitFor(() => expect(listJobs).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 }), expect.objectContaining({ signal: expect.any(AbortSignal) })))
   expect(await screen.findAllByRole('button', { name: /^删除 记录/ })).toHaveLength(9)
 })
 
@@ -73,6 +73,6 @@ it('returns Papers to a valid page after deleting the last item on the tail page
   await user.click(screen.getByRole('button', { name: '确认删除' }))
 
   await waitFor(() => expect(router.state.location.search).toBe('?page=0'))
-  await waitFor(() => expect(listPapers).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 })))
+  await waitFor(() => expect(listPapers).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 }), expect.objectContaining({ signal: expect.any(AbortSignal) })))
   expect(await screen.findAllByRole('button', { name: /^删除 试卷/ })).toHaveLength(12)
 })

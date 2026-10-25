@@ -83,10 +83,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T
 }
 
+export interface RequestOptions {
+  signal?: AbortSignal
+}
+
 export interface UploadOptions {
   onProgress?: (pct: number) => void
   signal?: AbortSignal
   timeoutMs?: number
+  idempotencyKey?: string
 }
 
 function upload<T>(path: string, fd: FormData, options: UploadOptions = {}): Promise<T> {
@@ -96,6 +101,7 @@ function upload<T>(path: string, fd: FormData, options: UploadOptions = {}): Pro
     xhr.open('POST', path)
     xhr.timeout = options.timeoutMs ?? 180_000
     xhr.withCredentials = true
+    if (options.idempotencyKey) xhr.setRequestHeader('Idempotency-Key', options.idempotencyKey)
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) options.onProgress?.(Math.round((event.loaded / event.total) * 100))
     }
@@ -121,11 +127,11 @@ function upload<T>(path: string, fd: FormData, options: UploadOptions = {}): Pro
     }
     xhr.ontimeout = () => {
       options.signal?.removeEventListener('abort', abort)
-      reject(new ApiError(0, '上传超时，已保留所选文件，请重试', 'timeout'))
+      reject(new ApiError(0, '已停止等待，请检查记录是否已创建', 'timeout'))
     }
     xhr.onabort = () => {
       options.signal?.removeEventListener('abort', abort)
-      reject(new ApiError(0, '上传已取消，所选文件仍保留', 'abort'))
+      reject(new ApiError(0, '已停止等待，请检查记录是否已创建', 'abort'))
     }
     options.signal?.addEventListener('abort', abort, { once: true })
     if (options.signal?.aborted) xhr.abort()
@@ -165,8 +171,9 @@ function listQuery(params: ListParams) {
 }
 
 export const api = {
-  me: () => request<User>('/api/auth/me'),
-  registrationOptions: () => request<RegistrationOptions>('/api/auth/registration-options'),
+  me: (options?: RequestOptions) => request<User>('/api/auth/me', { signal: options?.signal }),
+  registrationOptions: (options?: RequestOptions) =>
+    request<RegistrationOptions>('/api/auth/registration-options', { signal: options?.signal }),
   login: (username: string, password: string) =>
     request<User>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   register: (username: string, password: string, invite_code: string | null) =>
@@ -185,17 +192,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ max_uses, ttl_days }),
     }),
-  listInvites: () => request<{ invites: Invite[] }>('/api/admin/invites'),
+  listInvites: (options?: RequestOptions) =>
+    request<{ invites: Invite[] }>('/api/admin/invites', { signal: options?.signal }),
   revokeInvite: (code: string) =>
     request<{ ok: boolean }>(`/api/admin/invites/${encodeURIComponent(code)}`, { method: 'DELETE' }),
-  listAdminUsers: () => request<{ users: AdminUser[] }>('/api/admin/users'),
+  listAdminUsers: (options?: RequestOptions) =>
+    request<{ users: AdminUser[] }>('/api/admin/users', { signal: options?.signal }),
   resetAdminUserPassword: (id: number, password: string) =>
     request<{ ok: boolean }>(`/api/admin/users/${id}/password`, {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
 
-  listStudents: () => request<{ students: Student[] }>('/api/students'),
+  listStudents: (options?: RequestOptions) =>
+    request<{ students: Student[] }>('/api/students', { signal: options?.signal }),
   createStudent: (name: string) =>
     request<Student>('/api/students', { method: 'POST', body: JSON.stringify({ name }) }),
   renameStudent: (id: number, name: string) =>
@@ -215,11 +225,12 @@ export const api = {
   deleteStudentAccount: (id: number) =>
     request<{ ok: boolean }>(`/api/students/${id}/account`, { method: 'DELETE' }),
 
-  listPapers: (params: ListParams = {}) => {
+  listPapers: (params: ListParams = {}, options?: RequestOptions) => {
     const search = listQuery(params)
-    return request<{ papers: Paper[]; total: number }>(`/api/papers${search.size ? `?${search}` : ''}`)
+    return request<{ papers: Paper[]; total: number }>(`/api/papers${search.size ? `?${search}` : ''}`, { signal: options?.signal })
   },
-  getPaper: (id: string) => request<Paper>(`/api/papers/${id}`),
+  getPaper: (id: string, options?: RequestOptions) =>
+    request<Paper>(`/api/papers/${id}`, { signal: options?.signal }),
   createPaper: (
     files: File[], title: string | null, options?: UploadOptions,
     details: { subject?: string; grade?: string } = {},
@@ -280,13 +291,14 @@ export const api = {
   reprocessPaper: (id: string) =>
     request<{ ok: boolean }>(`/api/papers/${id}/reprocess`, { method: 'POST', body: '{}' }),
 
-  listJobs: (params: JobListParams = {}) => {
+  listJobs: (params: JobListParams = {}, options?: RequestOptions) => {
     const search = listQuery(params)
     if (params.studentId != null) search.set('student_id', String(params.studentId))
     if (params.paperId) search.set('paper_id', params.paperId)
-    return request<{ jobs: Job[]; total: number }>(`/api/jobs${search.size ? `?${search}` : ''}`)
+    return request<{ jobs: Job[]; total: number }>(`/api/jobs${search.size ? `?${search}` : ''}`, { signal: options?.signal })
   },
-  getJob: (id: string) => request<Job>(`/api/jobs/${id}`),
+  getJob: (id: string, options?: RequestOptions) =>
+    request<Job>(`/api/jobs/${id}`, { signal: options?.signal }),
   deleteJob: (id: string) => request<{ ok: boolean }>(`/api/jobs/${id}`, { method: 'DELETE' }),
   retryJob: (id: string) => request<{ ok: boolean }>(`/api/jobs/${id}/retry`, { method: 'POST', body: '{}' }),
   acceptJobPartial: (id: string) =>
@@ -338,20 +350,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ question, qid }),
     }),
-  getChat: (jobId: string, qid: string | null) =>
-    request<{ messages: ChatMessage[] }>(`/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`),
+  getChat: (jobId: string, qid: string | null, options?: RequestOptions) =>
+    request<{ messages: ChatMessage[] }>(`/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`, { signal: options?.signal }),
 
   sendFeedback: (message: string, page: string, diag: Record<string, unknown>) =>
     request<{ id: number }>('/api/feedback', {
       method: 'POST',
       body: JSON.stringify({ message, page, diag }),
     }),
-  listFeedback: () => request<{ feedback: Feedback[] }>('/api/admin/feedback'),
+  listFeedback: (options?: RequestOptions) =>
+    request<{ feedback: Feedback[] }>('/api/admin/feedback', { signal: options?.signal }),
   deleteFeedback: (id: number) =>
     request<{ ok: boolean }>(`/api/admin/feedback/${id}`, { method: 'DELETE' }),
-  listReleases: () => request<{ releases: Release[] }>('/api/releases'),
+  listReleases: (options?: RequestOptions) =>
+    request<{ releases: Release[] }>('/api/releases', { signal: options?.signal }),
 
-  mistakes: (filters: MistakeFilters = {}) => {
+  mistakes: (filters: MistakeFilters = {}, options?: RequestOptions) => {
     const search = new URLSearchParams()
     if (filters.studentId != null) search.set('student_id', String(filters.studentId))
     if (filters.paperId) search.set('paper_id', filters.paperId)
@@ -360,12 +374,13 @@ export const api = {
     if (filters.days) search.set('days', String(filters.days))
     return request<{ groups: { knowledge_point: string; questions: MistakeQuestion[] }[] }>(
       `/api/mistakes${search.size ? `?${search}` : ''}`,
+      { signal: options?.signal },
     )
   },
-  overview: (studentId?: number | null, days = 30) => {
+  overview: (studentId?: number | null, days = 30, options?: RequestOptions) => {
     const search = new URLSearchParams({ days: String(days) })
     if (studentId != null) search.set('student_id', String(studentId))
-    return request<Overview>(`/api/stats/overview?${search}`)
+    return request<Overview>(`/api/stats/overview?${search}`, { signal: options?.signal })
   },
 }
 

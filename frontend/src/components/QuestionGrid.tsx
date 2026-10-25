@@ -19,6 +19,13 @@ const DOT_CLS: Record<Question['status'], string> = {
     'bg-violet-100/80 text-violet-700 hover:bg-violet-200/80 dark:bg-violet-900/40 dark:text-violet-300',
 }
 
+const STATUS_LABEL: Record<Question['status'], string> = {
+  correct: '答对',
+  wrong: '答错',
+  unknown: '待确认',
+  subjective: '主观题',
+}
+
 export function QuestionGrid({ questions }: { questions: Question[] }) {
   const { filter, setFilter, selectedQid, setSelectedQid, setMobileTab } = useUi()
 
@@ -33,11 +40,12 @@ export function QuestionGrid({ questions }: { questions: Question[] }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5" role="group" aria-label="按判分状态筛选">
         {FILTERS.map((f) => (
           <button
             key={f.key}
             onClick={() => setFilter(f.key)}
+            aria-pressed={filter === f.key}
             className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
               filter === f.key ? 'chip chip-active' : 'chip'
             }`}
@@ -55,14 +63,16 @@ export function QuestionGrid({ questions }: { questions: Question[] }) {
               setSelectedQid(q.id)
               setMobileTab('detail')
             }}
-            title={`第 ${q.number} 题`}
+            title={`第 ${q.number} 题，${STATUS_LABEL[q.status]}`}
+            aria-label={`第 ${q.number} 题，${STATUS_LABEL[q.status]}${q.status !== 'correct' && q.explanation ? '，已有讲解' : ''}`}
+            aria-pressed={selectedQid === q.id}
             className={`relative flex h-9 items-center justify-center rounded-lg font-serif text-xs font-semibold transition-all ${DOT_CLS[q.status]} ${
               selectedQid === q.id ? 'ring-2 ring-primary-500 ring-offset-1 ring-offset-surface' : ''
             }`}
           >
             {q.number}
             {q.status !== 'correct' && q.explanation && (
-              <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-primary-500" title="已有讲解" />
+              <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-primary-500" />
             )}
           </button>
         ))}

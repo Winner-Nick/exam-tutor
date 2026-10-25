@@ -12,7 +12,7 @@ it('keeps invite requirements consistent on options failure and retries loading'
   const qc = new QueryClient()
   render(<QueryClientProvider client={qc}><MemoryRouter><LoginPage /></MemoryRouter></QueryClientProvider>)
 
-  await user.click(screen.getByRole('tab', { name: '注册' }))
+  await user.click(screen.getByRole('button', { name: '注册' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('当前按邀请码注册处理，请填写邀请码')
   expect(screen.getByLabelText('邀请码')).toBeRequired()
   expect(screen.getByRole('button', { name: '创建账号' })).toBeDisabled()

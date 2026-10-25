@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
+import { api } from '../api'
 import type { Job } from '../types'
 import { invalidateLearningData } from '../utils/query'
 
@@ -16,7 +17,14 @@ export function useJobEvents(jobId: string | undefined) {
     const patchJob = (patch: Partial<Job>) => {
       qc.setQueryData<Job>(['job', jobId], (old) => (old ? { ...old, ...patch } : old))
     }
-    const parse = (event: Event) => JSON.parse((event as MessageEvent).data) as Job
+    const parse = <T,>(event: Event): T | null => {
+      try {
+        return JSON.parse((event as MessageEvent).data) as T
+      } catch {
+        refreshJob()
+        return null
+      }
+    }
 
     source.addEventListener('open', () => {
       if (failures.current > 0) refreshJob()
@@ -24,12 +32,14 @@ export function useJobEvents(jobId: string | undefined) {
       setSseDown(false)
     })
     source.addEventListener('snapshot', (event) => {
-      const snapshot = parse(event)
+      const snapshot = parse<Job>(event)
+      if (!snapshot) return
       qc.setQueryData<Job>(['job', jobId], (old) => (old ? { ...snapshot, questions: old.questions } : old))
       refreshJob()
     })
     source.addEventListener('progress', (event) => {
-      const data = JSON.parse((event as MessageEvent).data)
+      const data = parse<{ stage: string; done: number; total: number; label: string | null }>(event)
+      if (!data) return
       patchJob({
         status: 'processing',
         stage: data.stage,
@@ -42,6 +52,7 @@ export function useJobEvents(jobId: string | undefined) {
     source.addEventListener('error', () => {
       failures.current += 1
       if (failures.current >= 2) setSseDown(true)
+      if (failures.current === 2) void api.me().catch(() => undefined)
     })
     return () => source.close()
   }, [jobId, qc])

@@ -61,27 +61,36 @@ export function JobPage() {
   const [acceptOpen, setAcceptOpen] = useState(false)
   const moreFilesRef = useRef<HTMLInputElement>(null)
   const uploadController = useRef<AbortController | null>(null)
+  const compressionGeneration = useRef(0)
   const deepHandled = useRef<string | null>(null)
   const { sseDown } = useJobEvents(jobId)
 
   const addFiles = useMutation({
-    mutationFn: (files: File[]) => {
+    mutationFn: (variables: { files: File[]; jobId: string; generation: number }) => {
       const controller = new AbortController()
       uploadController.current = controller
-      return api.addSubmissionFiles(jobId!, files, { signal: controller.signal, onProgress: setUploadPct })
+      return api.addSubmissionFiles(variables.jobId, variables.files, { signal: controller.signal, onProgress: setUploadPct })
     },
-    onSettled: () => {
+    onSettled: (_data, _error, variables) => {
+      if (variables.generation !== compressionGeneration.current) return
       uploadController.current = null
       setUploadPct(null)
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, variables) => {
+      if (variables.generation !== compressionGeneration.current) return
       setPendingFiles([])
       toast('文件已上传，正在重新识别判分')
       await invalidateLearningData(qc)
     },
-    onError: (error) => {
-      if (error instanceof ApiError && error.code === 'abort') toast('已取消上传，补拍文件仍保留')
-      else toast(error instanceof ApiError ? error.message : '上传失败，请重试', 'error')
+    onError: (error, variables) => {
+      if (error instanceof ApiError && ['abort', 'timeout', 'network'].includes(error.code)) {
+        void Promise.all([
+          qc.invalidateQueries({ queryKey: ['jobs'] }),
+          qc.invalidateQueries({ queryKey: ['job', variables.jobId] }),
+        ])
+      }
+      if (variables.generation !== compressionGeneration.current) return
+      toast(error instanceof ApiError ? error.message : '上传失败，请重试', 'error')
     },
   })
   useUploadGuard(addFiles.isPending || picking)
@@ -115,7 +124,7 @@ export function JobPage() {
 
   const jobQ = useQuery({
     queryKey: ['job', jobId],
-    queryFn: () => api.getJob(jobId!),
+    queryFn: ({ signal }) => api.getJob(jobId!, { signal }),
     enabled: !!jobId,
     refetchInterval: (query) => {
       const job = query.state.data
@@ -126,14 +135,23 @@ export function JobPage() {
   })
 
   useEffect(() => {
+    compressionGeneration.current += 1
+    uploadController.current?.abort()
+    uploadController.current = null
+    addFiles.reset()
+    setPicking(false)
+    setPendingFiles([])
+    setUploadPct(null)
     setSelectedQid(null)
     setChatQid(null)
-    setPendingFiles([])
     setFilter('all')
     setMobileTab('questions')
     deepHandled.current = null
-  }, [jobId, setSelectedQid, setFilter, setMobileTab])
-  useEffect(() => () => uploadController.current?.abort(), [])
+  }, [jobId, setSelectedQid, setFilter, setMobileTab, addFiles.reset])
+  useEffect(() => () => {
+    compressionGeneration.current += 1
+    uploadController.current?.abort()
+  }, [])
 
   const deepQid = searchParams.get('qid')
   useEffect(() => {
@@ -164,13 +182,15 @@ export function JobPage() {
 
   async function selectFiles(list: FileList | null) {
     if (busy || remaining === 0) return
+    const generation = compressionGeneration.current
     setPicking(true)
     try {
       const result = await compressPicked(list, 12, files.length + pendingFiles.length)
+      if (generation !== compressionGeneration.current) return
       if (result.dropped > 0) toast(`每份作答最多 12 个文件，已忽略 ${result.dropped} 个`, 'error')
       if (result.files.length) setPendingFiles((old) => [...old, ...result.files])
     } finally {
-      setPicking(false)
+      if (generation === compressionGeneration.current) setPicking(false)
     }
   }
 
@@ -194,7 +214,7 @@ export function JobPage() {
         {files.length > 0 && <ul className="divide-y divide-line/60">{files.map((file) => <li key={file.id} className="flex min-h-11 flex-wrap items-center gap-2 py-2 text-sm"><Icon name="file-text" size={15} className="text-dim" /><span className="min-w-0 flex-1 truncate">{file.filename || '未命名文件'}</span><span className="text-xs text-dim">{file.page_count ? `${file.page_count} 页` : ''}{file.status === 'error' ? ` · ${file.error || '识别失败'}` : ''}</span>{!isStudent && <button disabled={busy} onClick={() => setDeletingFile(file)} className="btn-ghost px-2 text-rose-700 dark:text-rose-300"><Icon name="trash" size={14} /> 删除</button>}</li>)}</ul>}
         <input ref={moreFilesRef} type="file" multiple disabled={busy} accept=".pdf,application/pdf,image/*" className="hidden" onChange={(event) => { void selectFiles(event.target.files); event.target.value = '' }} />
         {job.kind === 'submission' && <button onClick={() => moreFilesRef.current?.click()} disabled={busy || remaining === 0} className="btn-outline border-dashed px-4">{picking ? '正在处理照片…' : '选择补拍文件'}</button>}
-        {pendingFiles.length > 0 && <><ul className="flex flex-wrap gap-2">{pendingFiles.map((file, index) => <li key={`${file.name}-${index}`} className="badge min-h-9 bg-surface-2 text-ink2"><span className="max-w-44 truncate">{file.name}</span><button disabled={busy} onClick={() => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} className="flex h-8 w-8 items-center justify-center" aria-label={`移除 ${file.name}`}><Icon name="x" size={12} /></button></li>)}</ul><div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => addFiles.mutate(pendingFiles)} className="btn-primary px-4">{addFiles.isPending ? uploadPct != null ? `上传中 ${uploadPct}%` : '等待服务器接收…' : `上传 ${pendingFiles.length} 个文件`}</button>{addFiles.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消上传</button>}</div></>}
+        {pendingFiles.length > 0 && <><ul className="flex flex-wrap gap-2">{pendingFiles.map((file, index) => <li key={`${file.name}-${index}`} className="badge min-h-9 bg-surface-2 text-ink2"><span className="max-w-44 truncate">{file.name}</span><button disabled={busy} onClick={() => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} className="flex h-8 w-8 items-center justify-center" aria-label={`移除 ${file.name}`}><Icon name="x" size={12} /></button></li>)}</ul><div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => jobId && addFiles.mutate({ files: pendingFiles, jobId, generation: compressionGeneration.current })} className="btn-primary px-4">{addFiles.isPending ? uploadPct != null ? `上传中 ${uploadPct}%` : '等待服务器接收…' : `上传 ${pendingFiles.length} 个文件`}</button>{addFiles.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消上传</button>}</div></>}
       </section>
 
       <div className={chatActive ? 'hidden lg:block' : ''}><StatsBar job={job} /></div>

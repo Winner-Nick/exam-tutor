@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useDeferredValue, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -11,11 +11,13 @@ import { PageHeader } from '../components/PageHeader'
 import { Pagination } from '../components/Pagination'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey'
 import { useUploadGuard } from '../hooks/useUploadGuard'
 import type { Paper } from '../types'
 import { compressPicked } from '../utils/compressImage'
 import { emptyPageTarget } from '../utils/pagination'
-import { invalidateLearningData } from '../utils/query'
+import { invalidateCreatedPaper, invalidateLearningData } from '../utils/query'
 
 const PAGE_SIZE = 12
 
@@ -46,22 +48,27 @@ export function PapersPage() {
   const [manualOpen, setManualOpen] = useState(false)
   const [manualTitle, setManualTitle] = useState('')
   const [deleting, setDeleting] = useState<Paper | null>(null)
+  const [createdPaperId, setCreatedPaperId] = useState<string | null>(null)
   const query = params.get('q') ?? ''
-  const deferredQuery = useDeferredValue(query)
+  const debouncedQuery = useDebouncedValue(query)
   const page = Math.max(0, Number(params.get('page')) || 0)
+  const { key: idempotencyKey, regenerate: regenerateIdempotencyKey } = useIdempotencyKey([
+    pendingFiles, title, subject, grade,
+  ])
 
   const papers = useQuery({
-    queryKey: ['papers', { q: deferredQuery, page }],
-    queryFn: () => api.listPapers({ q: deferredQuery, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+    queryKey: ['papers', { q: debouncedQuery, page }],
+    queryFn: ({ signal }) => api.listPapers({ q: debouncedQuery, limit: PAGE_SIZE, offset: page * PAGE_SIZE }, { signal }),
     refetchInterval: (result) => result.state.data?.papers.some((paper) => paper.status === 'processing') ? 4000 : false,
   })
 
   const create = useMutation({
-    mutationFn: (variables: { files: File[]; title: string | null }) => {
+    mutationFn: (variables: { files: File[]; title: string | null; idempotencyKey: string }) => {
       const controller = new AbortController()
       uploadController.current = controller
       return api.createPaper(
-        variables.files, variables.title, { signal: controller.signal, onProgress: setUploadPct },
+        variables.files, variables.title,
+        { signal: controller.signal, onProgress: setUploadPct, idempotencyKey: variables.idempotencyKey },
         { subject, grade },
       )
     },
@@ -69,25 +76,32 @@ export function PapersPage() {
       uploadController.current = null
       setUploadPct(null)
     },
-    onSuccess: async ({ paper_id }) => {
+    onSuccess: ({ paper_id }) => {
       setPendingFiles([])
       setTitle('')
-      await invalidateLearningData(qc)
-      navigate(`/papers/${paper_id}`)
+      regenerateIdempotencyKey()
+      setCreatedPaperId(paper_id)
+      void invalidateCreatedPaper(qc)
     },
     onError: (error) => {
-      if (error instanceof ApiError && error.code === 'abort') toast('已取消上传，文件和试卷名称仍保留')
-      else toast(error instanceof ApiError ? error.message : '上传失败，请检查网络后重试', 'error')
+      toast(error instanceof ApiError ? error.message : '上传失败，请检查网络后重试', 'error')
+      if (error instanceof ApiError && ['abort', 'timeout', 'network'].includes(error.code)) {
+        void invalidateCreatedPaper(qc)
+      }
     },
   })
-  useUploadGuard(create.isPending || picking !== null)
+  useUploadGuard((create.isPending || picking !== null) && !createdPaperId)
+
+  useEffect(() => {
+    if (createdPaperId && create.isSuccess) navigate(`/papers/${createdPaperId}`)
+  }, [createdPaperId, create.isSuccess, navigate])
 
   const manual = useMutation({
     mutationFn: api.createManualPaper,
-    onSuccess: async ({ paper_id }) => {
+    onSuccess: ({ paper_id }) => {
       setManualOpen(false)
       setManualTitle('')
-      await invalidateLearningData(qc)
+      void invalidateCreatedPaper(qc)
       navigate(`/papers/${paper_id}`)
     },
     onError: (error) => toast(error instanceof ApiError ? error.message : '创建失败，请重试', 'error'),
@@ -146,7 +160,7 @@ export function PapersPage() {
             {picking ? <><Spinner className="h-4 w-4" /> {picking}</> : <><Icon name="upload" size={16} /> 选择文件{pendingFiles.length > 0 && `（${pendingFiles.length}）`}</>}
           </button>
           <label className="min-w-0 flex-1"><span className="sr-only">试卷名称</span><input value={title} disabled={busy} onChange={(event) => setTitle(event.target.value)} placeholder="试卷名称（可留空自动识别）" maxLength={80} className="input" /></label>
-          <button onClick={() => create.mutate({ files: pendingFiles, title: title.trim() || null })} disabled={pendingFiles.length === 0 || busy} className="btn-primary shrink-0 px-5">
+          <button onClick={() => create.mutate({ files: pendingFiles, title: title.trim() || null, idempotencyKey })} disabled={pendingFiles.length === 0 || busy} className="btn-primary shrink-0 px-5">
             {create.isPending ? uploadPct != null && uploadPct < 100 ? `上传中 ${uploadPct}%` : '等待服务器接收…' : '开始识别'}
           </button>
           {create.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消</button>}
@@ -170,7 +184,7 @@ export function PapersPage() {
       </section>
 
       <section className="space-y-4" aria-label="已有试卷">
-        <label className="block max-w-md"><span className="sr-only">搜索试卷</span><input value={query} onChange={(event) => setParams(event.target.value ? { q: event.target.value } : {})} className="input" placeholder="搜索试卷名称" /></label>
+        <label className="block max-w-md"><span className="sr-only">搜索试卷</span><input value={query} onChange={(event) => { const { value } = event.target; setParams((old) => { const next = new URLSearchParams(old); if (value) next.set('q', value); else next.delete('q'); next.delete('page'); return next }, { replace: true }) }} className="input" placeholder="搜索试卷名称" /></label>
         {papers.isPending ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-28 rounded-2xl" />)}</div>
         ) : papers.isError ? (
