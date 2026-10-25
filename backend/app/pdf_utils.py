@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import warnings
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -15,6 +16,19 @@ try:  # iPhone 拍照默认 HEIC，注册后 PIL 可直接打开
     register_heif_opener()
 except ImportError:
     pass
+
+
+MAX_IMAGE_PIXELS = 30_000_000
+MAX_RENDER_PIXELS = 30_000_000
+
+
+def validate_image(src: str | Path) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with Image.open(src) as img:
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise ValueError(f"图片像素超过 {MAX_IMAGE_PIXELS} 上限")
+            img.verify()
 
 
 def page_count(pdf_path: str | Path) -> int:
@@ -62,11 +76,10 @@ def render_pdf_to_images(
     paths: list[Path] = []
     try:
         for i, page in enumerate(doc):
-            # 防御"尺寸炸弹"页：超大 MediaBox 渲染时会分配巨量内存（DoS）
             rect = page.rect
-            if (rect.width * dpi / 72) * (rect.height * dpi / 72) > 40_000_000:
+            if (rect.width * dpi / 72) * (rect.height * dpi / 72) > MAX_RENDER_PIXELS:
                 raise ValueError(
-                    f"第 {i + 1} 页物理尺寸异常（{rect.width:.0f}x{rect.height:.0f}pt），疑似损坏或恶意文件"
+                    f"第 {i + 1} 页物理尺寸异常（{rect.width:.0f}x{rect.height:.0f}pt），超过渲染像素上限"
                 )
             pix = page.get_pixmap(dpi=dpi, alpha=False)
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
@@ -77,6 +90,16 @@ def render_pdf_to_images(
     finally:
         doc.close()
     return paths
+
+
+def _flatten_white(img: Image.Image) -> Image.Image:
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        return Image.alpha_composite(background, rgba).convert("RGB")
+    if img.mode not in ("RGB", "L"):
+        return img.convert("RGB")
+    return img
 
 
 def photo_to_page(
@@ -94,13 +117,16 @@ def photo_to_page(
     quality = quality or settings.render_quality
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    with Image.open(src) as img:
-        img = ImageOps.exif_transpose(img)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        img = _normalize(img, max_dim, grayscale=False)
-        out = out_dir / f"page_{page_index:02d}.jpg"
-        img.save(out, "JPEG", quality=quality)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with Image.open(src) as img:
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise ValueError(f"图片像素超过 {MAX_IMAGE_PIXELS} 上限")
+            img = ImageOps.exif_transpose(img)
+            img = _flatten_white(img)
+            img = _normalize(img, max_dim, grayscale=False)
+            out = out_dir / f"page_{page_index:02d}.jpg"
+            img.save(out, "JPEG", quality=quality)
     return out
 
 

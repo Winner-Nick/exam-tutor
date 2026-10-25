@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -92,28 +93,25 @@ async def save_upload(file: UploadFile, dest_stem: Path,
     size = len(head)
     try:
         with dest.open("wb") as f:
-            f.write(head)
+            await run_in_threadpool(f.write, head)
             while chunk := await file.read(1 << 20):
                 size += len(chunk)
                 if size > max_bytes:
                     raise HTTPException(413, f"文件超过 {settings.max_upload_mb}MB 上限")
                 sha.update(chunk)
-                f.write(chunk)
+                await run_in_threadpool(f.write, chunk)
         if ext == ".pdf":
             try:
-                n = pdf_utils.page_count(dest)
+                n = await run_in_threadpool(pdf_utils.page_count, dest)
             except Exception:
                 raise HTTPException(400, "PDF 文件损坏或无法解析") from None
             if n < 1 or n > settings.max_pages:
                 raise HTTPException(400, f"PDF 页数需在 1-{settings.max_pages} 页之间")
         else:
-            from PIL import Image
-
             try:
-                with Image.open(dest) as img:
-                    img.verify()
+                await run_in_threadpool(pdf_utils.validate_image, dest)
             except Exception:
-                raise HTTPException(400, "图片文件损坏或格式不支持") from None
+                raise HTTPException(400, "图片文件损坏、格式不支持或像素超限") from None
     except HTTPException:
         dest.unlink(missing_ok=True)
         raise
