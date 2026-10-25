@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import threading
 import time
+import weakref
 
 from .db import get_conn, transaction
 
-_locks: dict[str, threading.RLock] = {}
+_locks = weakref.WeakValueDictionary()
 _locks_guard = threading.Lock()
 
 

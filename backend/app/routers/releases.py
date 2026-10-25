@@ -10,6 +10,7 @@ import json
 import re
 import threading
 import time
+import weakref
 from urllib.parse import quote
 
 import httpx
@@ -30,7 +31,7 @@ _cache_lock = threading.Lock()
 _TAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,50}$")
 
 # 按 tag 串行化 APK 首下：并发写同一 .part 会字节交错，rename 出损坏包被长期分发
-_apk_locks: dict[str, threading.Lock] = {}
+_apk_locks = weakref.WeakValueDictionary()
 _apk_locks_guard = threading.Lock()
 
 
