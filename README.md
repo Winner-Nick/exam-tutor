@@ -66,6 +66,8 @@ cd frontend && npm install && npm run build && cd ..
 | `RENDER_MAX_DIM` | 渲染最长边(视觉成本主杠杆),默认 `1280` |
 | `VISION_CONCURRENCY` | 视觉并发,小内存机器建议 `2-3` |
 
+每份作答最多 12 个文件，整份试卷最多 30 个文件；上传与复用累计限制为 120MB，单文件和累计页数仍受上表限制。
+
 视觉与文本统一使用 `deepseek-v4-1-flash-261017`。模型在 `backend/app/config.py` 中随代码和缓存协议固定，不再通过 `VISION_MODEL` / `DEEPSEEK_MODEL` 环境变量切换；升级模型时必须同步升级缓存版本并跑识别回归，旧缓存不会混入新链路。
 
 完整列表见 `.env.example`。`.env` 已被 `.gitignore` 忽略,切勿提交密钥。
@@ -108,13 +110,14 @@ your.domain {
 |---|---|---|
 | `POST` | `/api/auth/register` `/login` `/logout` | 注册(邀请码)/ 登录 / 登出 |
 | `GET/POST` | `/api/students` | 学生列表 / 新增(自动含「我自己」) |
-| `POST` | `/api/papers` | 上传试卷文件建卷(可多文件) |
+| `POST` | `/api/papers` | 上传试卷文件建卷(可多文件,支持 `Idempotency-Key`) |
 | `POST` | `/api/papers/manual` | 不传文件,纯手动建卷 |
 | `POST` | `/api/papers/{id}/files` | 补传答案/题目文件,自动重新汇总 |
-| `PATCH` | `/api/papers/{id}/questions/{qid}` | 核对/修改标准答案并同步重判 |
-| `POST` | `/api/submissions` | 提交批改:学生+试卷+照片/PDF |
+| `PATCH` | `/api/papers/{id}/questions/{qid}` | 核对/修改标准答案并后台同步历史提交 |
+| `POST` | `/api/submissions` | 提交批改:学生+试卷+照片/PDF(支持 `Idempotency-Key`) |
 | `POST` | `/api/jobs/{id}/files` | 补拍补传,增量重跑 |
-| `POST` | `/api/papers/{id}/retry` `/jobs/{id}/retry` | 使用原文件重试;部分结果另有 `/accept-partial` |
+| `POST` | `/api/papers/{id}/retry` `/jobs/{id}/retry` | 只补失败页;部分结果另有 `/accept-partial` |
+| `POST` | `/api/papers/{id}/reprocess` `/jobs/{id}/reprocess` | 绕过成功缓存,强制重新识别 |
 | `GET` | `/api/jobs/{id}/events` | SSE:进度 / 完成 / 讲解就绪 |
 | `POST` | `/api/jobs/{id}/questions/{qid}/override` | 人工修正(补拍不覆盖) |
 | `POST` | `/api/jobs/{id}/questions/{qid}/review` | 复习作答、掌握/恢复与间隔排期 |
@@ -129,8 +132,8 @@ your.domain {
 backend/
   app/
     config.py     配置与密钥
-    db.py         SQLite 连接 + schema 迁移
-    store.py      DAO(users/students/papers/jobs/questions/chat)
+    db.py         SQLite 连接 + 原子 schema 迁移
+    store/        users/students/papers/jobs/questions/reviews 等领域 DAO
     auth.py       bcrypt + JWT(httpOnly cookie) + 归属校验
     security.py   上传校验(PDF/图片) / 限流 / 安全响应头
     workers.py    持久任务调度 + 讲解优先级队列
@@ -140,7 +143,8 @@ backend/
     pdf_utils.py  PDF/照片 → 页面图(EXIF 矫正/限边长/空白页检测)
     prompts.py    提示词(试卷全量识别 / 作答小输出识别 / 讲解 / 答疑)
     llm.py        DeepSeek 视觉与文本统一客户端
-    pipeline.py   试卷入库 + 作答判分 + 补拍合并
+    llm_schemas.py 模型结构化输出校验
+    pipeline/     grading/identity/artifacts/paper/submission/reconcile 等处理阶段
     routers/      auth / students / papers / jobs / questions / chat / insights
   scripts/        数据迁移、备份与校验脚本
 frontend/         React + Vite + TS + Tailwind(构建产物 dist/ 由后端托管)
