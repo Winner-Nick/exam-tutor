@@ -83,3 +83,15 @@ def test_manual_paper_and_question_creation(admin_client):
     assert paper["answered_count"] == 1
     assert paper["questions"] == [question]
     assert paper["files"] == []
+
+
+def test_readiness_and_unknown_api(client):
+    ready = client.get("/api/health/ready")
+    assert ready.status_code == 200
+    assert ready.json()["database"] == "ok"
+    assert ready.json()["version"] == "1.0.0"
+
+    missing = client.get("/api/not-a-route")
+    assert missing.status_code == 404
+    assert missing.headers["content-type"].startswith("application/json")
+    assert missing.json()["detail"] == "接口不存在"
