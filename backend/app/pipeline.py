@@ -5,11 +5,17 @@ import json
 import re
 import shutil
 import threading
+import unicodedata
+from collections import Counter
+from decimal import Decimal, InvalidOperation
 
 from . import events, llm, pdf_utils, prompts, store
 
 _CONF = {"high": 3, "medium": 2, "low": 1}
-_SUBJECTIVE_HINT = ("文段表达", "作文", "写作", "writing", "范文")
+_SUBJECTIVE_HINT = (
+    "主观", "简答", "解答", "论述", "文段表达", "作文", "写作", "范文",
+    "subjective", "essay", "writing", "short_answer", "short answer",
+)
 
 
 def _num_key(num: str):
@@ -17,11 +23,52 @@ def _num_key(num: str):
     return int(digits) if digits else 10**9
 
 
-def _merge_pages(pages: list[dict]) -> tuple[list[str], dict[str, dict], dict[str, str]]:
-    """把各页视觉识别结果合并为 题号->题目 与 题号->正确答案。
+def _number_conflicts(pages: list[dict]) -> set[str]:
+    counts: dict[str, int] = {}
+    answer_values: dict[str, set[str]] = {}
+    conflicts: set[str] = set()
+    for p in pages:
+        for q in p.get("questions") or []:
+            number = str(q.get("number") or "").strip()
+            original = str(q.get("_original_number") or number).strip()
+            key = store.normalize_number_key(original)
+            if key:
+                counts[key] = counts.get(key, 0) + 1
+            if q.get("_number_conflict") and key:
+                conflicts.add(key)
+        for number, value in (p.get("answer_key") or {}).items():
+            key = store.normalize_number_key(number)
+            answer = str(value or "").strip()
+            if key and answer:
+                answer_values.setdefault(key, set()).add(answer)
+    conflicts.update(key for key, count in counts.items() if count > 1)
+    conflicts.update(key for key, values in answer_values.items() if len(values) > 1)
+    return conflicts
 
-    相比让 DeepSeek 重新生成全部题目 JSON（易超长截断），直接合并更稳健、可控。
-    """
+
+def _mark_number_conflicts(pages: list[dict]) -> None:
+    conflicts = _number_conflicts(pages)
+    for p in pages:
+        for q in p.get("questions") or []:
+            original = str(q.get("_original_number") or q.get("number") or "").strip()
+            if store.normalize_number_key(original) in conflicts:
+                q["_original_number"] = original
+                q["_number_conflict"] = True
+                q["needs_review"] = True
+
+
+def _answer_for(answer_key: dict[str, str], number: str) -> str | None:
+    key = store.normalize_number_key(number)
+    return next(
+        (value for answer_number, value in answer_key.items()
+         if store.normalize_number_key(answer_number) == key),
+        None,
+    )
+
+
+def _merge_pages(pages: list[dict]) -> tuple[list[str], dict[str, dict], dict[str, str]]:
+    """合并页面结果；原始重号或冲突答案绝不按后写覆盖套题。"""
+    conflicts = _number_conflicts(pages)
     qmap: dict[str, dict] = {}
     order: list[str] = []
     for p in pages:
@@ -29,17 +76,26 @@ def _merge_pages(pages: list[dict]) -> tuple[list[str], dict[str, dict], dict[st
             num = str(q.get("number") or "").strip()
             if not num:
                 continue
+            original = str(q.get("_original_number") or num).strip()
+            answer_conflict = (
+                store.normalize_number_key(num) in conflicts
+                or store.normalize_number_key(original) in conflicts
+                or bool(q.get("_number_conflict"))
+            )
             if num not in qmap:
                 qmap[num] = {
                     "number": num, "section": q.get("section"), "type": q.get("type"),
                     "stem": q.get("stem") or "", "options": q.get("options"),
                     "passage": q.get("passage"), "_sa": None, "_saconf": -1,
                     "needs_review": bool(q.get("needs_review")),
+                    "_answer_conflict": answer_conflict,
                 }
                 order.append(num)
             cur = qmap[num]
-            if q.get("needs_review"):
+            if q.get("needs_review") or answer_conflict:
                 cur["needs_review"] = True
+            if answer_conflict:
+                cur["_answer_conflict"] = True
             for f in ("section", "type", "passage"):
                 if not cur.get(f) and q.get(f):
                     cur[f] = q.get(f)
@@ -56,11 +112,13 @@ def _merge_pages(pages: list[dict]) -> tuple[list[str], dict[str, dict], dict[st
                 cur["_saconf"] = conf
 
     answer_key: dict[str, str] = {}
+    seen: set[str] = set()
     for p in pages:
         for k, v in (p.get("answer_key") or {}).items():
-            kk = str(k).strip()
-            if kk and v:
+            kk, key = str(k).strip(), store.normalize_number_key(k)
+            if kk and key not in conflicts and key not in seen and str(v or "").strip():
                 answer_key[kk] = str(v).strip()
+                seen.add(key)
     return order, qmap, answer_key
 
 
@@ -70,12 +128,15 @@ def build_questions(pages: list[dict]) -> tuple[list[dict], dict]:
     questions: list[dict] = []
     for num in sorted(order, key=_num_key):
         c = qmap[num]
+        conflict = bool(c.get("_answer_conflict"))
         questions.append({
             "id": "q" + num, "number": num, "section": c.get("section"),
             "type": c.get("type"), "stem": c.get("stem"),
             "options": c.get("options") or None, "passage": c.get("passage"),
-            "student_answer": c["_sa"], "correct_answer": answer_key.get(num),
+            "student_answer": c["_sa"],
+            "correct_answer": None if conflict else _answer_for(answer_key, num),
             "knowledge_point": None, "status": "unknown",
+            "needs_review": bool(c.get("needs_review") or conflict),
         })
     _grade_all(questions)
     return questions, answer_key
@@ -91,22 +152,37 @@ def build_paper_questions(pages: list[dict]) -> list[dict]:
     questions: list[dict] = []
     for num in sorted(order, key=_num_key):
         c = qmap[num]
+        conflict = bool(c.get("_answer_conflict"))
         questions.append({
             "id": "q" + num, "number": num, "section": c.get("section"),
             "type": c.get("type"), "stem": c.get("stem"),
             "options": c.get("options") or None, "passage": c.get("passage"),
-            "correct_answer": answer_key.get(num), "knowledge_point": None,
-            "needs_review": bool(c.get("needs_review")),
+            "correct_answer": None if conflict else _answer_for(answer_key, num),
+            "knowledge_point": None,
+            "needs_review": bool(c.get("needs_review") or conflict),
         })
-    known = set(order)
+    known = {store.normalize_number_key(number) for number in order}
     ambiguous = {
-        q["_original_number"]
+        store.normalize_number_key(q["_original_number"])
         for p in pages for q in (p.get("questions") or [])
         if q.get("needs_review") and q.get("_original_number")
     }
+    conflicts = _number_conflicts(pages)
+    conflict_stubs: dict[str, str] = {}
+    for p in pages:
+        for number in (p.get("answer_key") or {}):
+            num, key = str(number).strip(), store.normalize_number_key(number)
+            if key in conflicts and key not in known and key not in ambiguous:
+                conflict_stubs.setdefault(key, num)
+    for num in conflict_stubs.values():
+        questions.append({
+            "id": "q" + num, "number": num, "section": None, "type": None,
+            "stem": None, "options": None, "passage": None,
+            "correct_answer": None, "knowledge_point": None, "needs_review": True,
+        })
     for num, ans in answer_key.items():
-        # 重号未解决的答案不生成存根，避免把不确定答案硬套到另一道题。
-        if num not in known and num not in ambiguous and ans.strip().rstrip("。.") != "略":
+        key = store.normalize_number_key(num)
+        if key not in known and key not in ambiguous and ans.strip().rstrip("。.") != "略":
             questions.append({
                 "id": "q" + num, "number": num, "section": None, "type": None,
                 "stem": None, "options": None, "passage": None,
@@ -122,11 +198,12 @@ def _global_numbering_ok(pages: list[dict]) -> bool:
     for p in pages:
         for q in p.get("questions") or []:
             num = str(q.get("number") or "").strip()
-            if not num:
+            key = store.normalize_number_key(num)
+            if not key:
                 continue
-            if num in seen or not num.isdigit():
+            if key in seen or not num.isdigit():
                 return False
-            seen.add(num)
+            seen.add(key)
     return True
 
 
@@ -134,29 +211,30 @@ def _ensure_unique_numbers(pages: list[dict]) -> None:
     counts: dict[str, int] = {}
     for p in pages:
         for q in p.get("questions") or []:
-            number = str(q.get("number") or "").strip()
-            if number:
-                counts[number] = counts.get(number, 0) + 1
+            key = store.normalize_number_key(str(q.get("number") or "").strip())
+            if key:
+                counts[key] = counts.get(key, 0) + 1
     used: set[str] = set()
     for p in pages:
         occurrence = 0
         for q in p.get("questions") or []:
             original = str(q.get("number") or "").strip()
-            if not original:
+            original_key = store.normalize_number_key(original)
+            if not original_key:
                 continue
             occurrence += 1
             number = original
-            if counts[original] > 1:
-                q["_original_number"] = original
+            if counts[original_key] > 1:
+                q.setdefault("_original_number", original)
                 base = f"{original}-U{p.get('page', 0)}-{occurrence}"
                 number = base
                 serial = 2
-                while number in used:
+                while store.normalize_number_key(number) in used:
                     number = f"{base}-{serial}"
                     serial += 1
                 q["needs_review"] = True
             q["number"] = number
-            used.add(number)
+            used.add(store.normalize_number_key(number))
 
 
 def _renumber_pages(pages: list[dict]) -> None:
@@ -198,32 +276,104 @@ def _renumber_pages(pages: list[dict]) -> None:
                 q.pop("_renumber_uid", None)
 
 
+def _answer_text(value) -> str:
+    return unicodedata.normalize("NFKC", "" if value is None else str(value)).strip()
+
+
+def _choice_labels(value, legal: set[str]) -> list[str] | None:
+    text = _answer_text(value).upper().strip("()[]（）【】")
+    compact = re.sub(r"[\s,，、;；/\\|.．]+", "", text)
+    if not compact or any(not c.isascii() or not c.isalnum() for c in compact):
+        return None
+    labels = list(compact)
+    if len(labels) != len(set(labels)) or any(label not in legal for label in labels):
+        return None
+    return labels
+
+
+def _numeric_value(value) -> Decimal | None:
+    text = _answer_text(value).replace("−", "-")
+    if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
+        return None
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() else None
+
+
+def _unreliable_reference(value: str) -> bool:
+    normalized = re.sub(r"\s+", "", _answer_text(value)).casefold().rstrip("。.!")
+    if normalized in {"略", "答案略", "参考答案略", "合理即可", "答案不唯一", "见解析", "待定", "unknown", "n/a"}:
+        return True
+    return "或" in normalized and len(normalized) <= 50
+
+
+def _compare_fill(student, correct) -> str:
+    sa, ca = _answer_text(student), _answer_text(correct)
+    if not sa or not ca or _unreliable_reference(ca):
+        return "unknown"
+    sa_num, ca_num = _numeric_value(sa), _numeric_value(ca)
+    if sa_num is not None and ca_num is not None:
+        return "correct" if sa_num == ca_num else "wrong"
+    normalize = lambda value: re.sub(r"\s+", "", value).casefold()
+    return "correct" if normalize(sa) == normalize(ca) else "wrong"
+
+
 def _grade_one(q: dict) -> None:
-    """主观题明确识别；其他缺答案或无法可靠比较的一律待确认。"""
-    opts = q.get("options")
-    ca = q.get("correct_answer")
-    sa = q.get("student_answer")
-    hint = f"{q.get('type') or ''}{q.get('section') or ''}"
-    explicit_subjective = str(q.get("type") or "").strip().lower() == "subjective"
-    if any(h in hint for h in _SUBJECTIVE_HINT) or explicit_subjective:
+    """按题型选择可解释的 comparator；无法可靠比较时不猜测对错。"""
+    opts = q.get("options") or {}
+    ca, sa = q.get("correct_answer"), q.get("student_answer")
+    hint = f"{q.get('type') or ''} {q.get('section') or ''}".casefold()
+    if any(h in hint for h in _SUBJECTIVE_HINT):
         q["status"] = "subjective"
-    elif opts:
-        if not sa:
+        return
+
+    choice_hint = any(h in hint for h in ("选择", "单选", "多选", "choice", "select"))
+    if opts or choice_hint:
+        legal = {_answer_text(key).upper() for key in opts}
+        if not legal or any(len(label) != 1 for label in legal):
             q["status"] = "unknown"
-        elif ca and sa.strip().upper() == ca.strip().upper():
-            q["status"] = "correct"
-        elif ca:
-            q["status"] = "wrong"
+            return
+        ca_labels, sa_labels = _choice_labels(ca, legal), _choice_labels(sa, legal)
+        if ca_labels is None or sa_labels is None:
+            q["status"] = "unknown"
+            return
+        single = "单选" in hint or "single" in hint
+        multiple = not single and (
+            "多选" in hint or "multi" in hint or len(ca_labels) > 1
+        )
+        if (single and (len(ca_labels) != 1 or len(sa_labels) != 1)) or (
+                not multiple and (len(ca_labels) != 1 or len(sa_labels) != 1)):
+            q["status"] = "unknown"
         else:
-            q["status"] = "unknown"
+            q["status"] = "correct" if set(ca_labels) == set(sa_labels) else "wrong"
+        return
+
+    if any(h in hint for h in ("数值", "数字题", "numeric", "number")):
+        sa_num, ca_num = _numeric_value(sa), _numeric_value(ca)
+        q["status"] = (
+            "unknown" if sa_num is None or ca_num is None
+            else "correct" if sa_num == ca_num else "wrong"
+        )
+        return
+
+    fill_hint = any(h in hint for h in ("填空", "fill", "blank"))
+    if fill_hint:
+        q["status"] = _compare_fill(sa, ca)
+        return
+
+    sa_text, ca_text = _answer_text(sa), _answer_text(ca)
+    if not sa_text or not ca_text or _unreliable_reference(ca_text):
+        q["status"] = "unknown"
+    elif _compare_fill(sa_text, ca_text) == "correct":
+        q["status"] = "correct"
+    elif _numeric_value(sa_text) is not None and _numeric_value(ca_text) is not None:
+        q["status"] = "wrong"
+    elif len(ca_text) == 1 and ca_text.isalpha():
+        q["status"] = "wrong"
     else:
-        sa_s, ca_s = (sa or "").strip(), (ca or "").strip()
-        if sa_s and ca_s and sa_s.lower() == ca_s.lower():
-            q["status"] = "correct"
-        elif sa_s and len(ca_s) == 1 and ca_s.isalpha():
-            q["status"] = "wrong"
-        else:
-            q["status"] = "unknown"
+        q["status"] = "unknown"
 
 
 def _grade_all(questions: list[dict]) -> None:
@@ -281,6 +431,23 @@ def regrade(questions: list[dict]) -> None:
     与初判完全同一套规则（_grade_one），避免两条路径判定不一致。"""
     for q in questions:
         _grade_one(q)
+
+
+def _preserve_overrides(job_id: str, questions: list[dict]) -> None:
+    previous = store.get_questions(job_id)
+    old = {q["id"]: q for q in previous}
+    recognized = {q["id"] for q in questions}
+    for q in questions:
+        old_q = old.get(q["id"])
+        if old_q and old_q.get("overridden"):
+            q["student_answer"] = old_q.get("student_answer")
+            q["status"] = old_q["status"]
+            q["overridden"] = True
+    questions.extend(
+        q for q in previous
+        if q.get("overridden") and q["id"] not in recognized
+    )
+    questions.sort(key=lambda q: _num_key(q.get("number")))
 
 
 def process_job(job_id: str) -> None:
@@ -351,9 +518,23 @@ def process_job(job_id: str) -> None:
             store.write_json_atomic(pages_cache,
                                     [p for p in pages if not p.get("error")], indent=2)
 
+        by_page = {
+            p["page"]: p for p in pages
+            if isinstance(p, dict) and type(p.get("page")) is int
+            and 1 <= p["page"] <= len(imgs)
+        }
+        pages = [by_page.get(i) or {
+            "page": i, "error": "视觉识别未返回该页结果", "raw_text": "",
+            "questions": [], "answer_key": {},
+        } for i in range(1, len(imgs) + 1)]
+        store.write_json_atomic(
+            pages_cache, [p for p in pages if not p.get("error")], indent=2,
+        )
+
         # 3) 汇总 + 判分（代码合并各页结果，稳健可控）
         _set_progress(job_id, "consolidate", 0, 1, "正在汇总题目并对照答案判分…")
         questions, answer_key = build_questions(pages)
+        _preserve_overrides(job_id, questions)
         meta = build_meta(pages, questions, job.get("filename", ""))
         store.write_json_atomic(
             jd / "consolidated.json",
@@ -403,8 +584,8 @@ def _render_files(owner_dir, files: list[dict], path_of) -> list[tuple[dict, int
     page_no = 0
     for f in files:
         fpath = path_of(f["id"])
-        if not fpath:
-            continue
+        if fpath is None or not fpath.is_file():
+            raise FileNotFoundError(f"清单源文件缺失: {f.get('filename') or f['id']}")
         if fpath.suffix.lower() == ".pdf":
             n = len(pdf_utils.render_pdf_to_images(fpath, pages_dir, start_index=page_no))
         else:
@@ -435,38 +616,42 @@ def _is_blank_entry(p: dict) -> bool:
 
 def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
                        mode: str, vision_call, blank_result) -> list[dict]:
-    """对一个文件的 n 页做视觉识别，按文件 sha 缓存（页码为文件内局部 1..n）。
-
-    缓存校验规则：
-    - "空白页"结论存疑则重识（阈值修正后曾被误判跳过的页可自愈）；
-    - 含 error 的占位条目视同未识别（瞬时故障不得变成永久缓存）；
-    - error 条目永不写回缓存。
-    """
+    """识别文件的局部 1..n 页；缓存或模型缺页都会重识或返回 error 占位。"""
     cache = store.vision_cache_path(sha256, mode) if sha256 else None
     lock = _cache_lock_for(f"{sha256}:{mode}") if sha256 else threading.Lock()
+    expected = set(range(1, n + 1))
     with lock:
         by_idx: dict[int, dict] = {}
         if cache and cache.exists():
             try:
                 cached = json.loads(cache.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
-                cached = None  # 缓存损坏：整体重识并覆写
-            if cached is not None:
-                have = {p["page"] for p in cached if isinstance(p.get("page"), int)}
-                stale = [
-                    p["page"] for p in cached
-                    if p.get("error")
-                    or (
-                        _is_blank_entry(p)
-                        and (pages_dir / f"page_{start + p['page']:02d}.jpg").exists()
-                        and not pdf_utils.is_blank_page(pages_dir / f"page_{start + p['page']:02d}.jpg")
-                    )
-                ]
-                # error 条目不落缓存 → 对应页在缓存里整个缺失，也要重识
-                missing = [li for li in range(1, n + 1) if li not in have]
-                if not stale and not missing:
-                    return cached
-                by_idx = {p["page"]: p for p in cached if p["page"] not in stale}
+                cached = None
+            if isinstance(cached, list):
+                duplicates: set[int] = set()
+                for p in cached:
+                    if not isinstance(p, dict) or type(p.get("page")) is not int:
+                        continue
+                    page = p["page"]
+                    if page not in expected:
+                        continue
+                    if page in by_idx:
+                        duplicates.add(page)
+                    else:
+                        by_idx[page] = p
+                for page in duplicates:
+                    del by_idx[page]
+                stale = set()
+                for page, p in by_idx.items():
+                    img = pages_dir / f"page_{start + page:02d}.jpg"
+                    if p.get("error") or (
+                            _is_blank_entry(p) and img.exists()
+                            and not pdf_utils.is_blank_page(img)):
+                        stale.add(page)
+                for page in stale:
+                    del by_idx[page]
+                if expected <= set(by_idx):
+                    return [by_idx[i] for i in range(1, n + 1)]
 
         payload = []
         for li in range(1, n + 1):
@@ -475,15 +660,24 @@ def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
             img = pages_dir / f"page_{start + li:02d}.jpg"
             if pdf_utils.is_blank_page(img):
                 r = blank_result(li)
+                r["page"] = li
                 r["blank"] = True
                 by_idx[li] = r
             else:
                 payload.append((li, pdf_utils.image_to_data_url(img)))
-        for r in vision_call(payload):
-            by_idx[r["page"]] = r
-        results = [by_idx[i] for i in sorted(by_idx)]
+        requested = {li for li, _ in payload}
+        if payload:
+            for r in vision_call(payload):
+                if (isinstance(r, dict) and type(r.get("page")) is int
+                        and r["page"] in requested):
+                    by_idx[r["page"]] = r
+        for li in expected - set(by_idx):
+            by_idx[li] = {
+                "page": li, "error": "视觉识别未返回该页结果", "raw_text": "",
+                "questions": [], "answer_key": {}, "answers": [],
+            }
+        results = [by_idx[i] for i in range(1, n + 1)]
         if cache:
-            # error 占位不入缓存：下次处理自动重试失败页
             store.write_json_atomic(cache, [p for p in results if not p.get("error")])
         return results
 
@@ -535,6 +729,7 @@ def process_paper(paper_id: str) -> None:
             failed_pages = [p["page"] for p in all_pages if p.get("error")]
 
             _set_paper_progress(paper_id, "consolidate", 0, 1, "正在汇总题目与标准答案…")
+            _mark_number_conflicts(all_pages)
             if not _global_numbering_ok(all_pages):
                 try:
                     _renumber_pages(all_pages)
@@ -559,9 +754,11 @@ def process_paper(paper_id: str) -> None:
                 if not previous:
                     continue
                 if previous.get("edited"):
-                    q["correct_answer"] = previous.get("correct_answer")
+                    if not q.get("needs_review"):
+                        q["correct_answer"] = previous.get("correct_answer")
                     q["edited"] = True
-                elif not q.get("correct_answer") and previous.get("correct_answer"):
+                elif (not q.get("needs_review") and not q.get("correct_answer")
+                      and previous.get("correct_answer")):
                     q["correct_answer"] = previous["correct_answer"]
                 if previous.get("content_edited"):
                     for field in ("number", "section", "type", "stem", "options", "passage"):
@@ -616,7 +813,12 @@ def process_paper(paper_id: str) -> None:
 
 def regrade_paper_submissions(paper_id: str) -> int:
     """把当前试卷内容同步到非在途提交；在途提交在最终判分锁内会重读。"""
-    paper_questions = {q["id"]: q for q in store.get_paper_questions(paper_id)}
+    paper_question_list = store.get_paper_questions(paper_id)
+    paper_questions = {q["id"]: q for q in paper_question_list}
+    number_counts = Counter(
+        store.normalize_number_key(q.get("number")) for q in paper_question_list
+        if store.normalize_number_key(q.get("number"))
+    )
     changed_submissions = 0
     with store.paper_lock(paper_id):
         for job_id in store.list_submission_ids_for_paper(paper_id):
@@ -633,16 +835,26 @@ def regrade_paper_submissions(paper_id: str) -> int:
                     fields = {
                         key: pq.get(key) for key in
                         ("number", "section", "type", "stem", "options", "passage",
-                         "correct_answer", "knowledge_point")
+                         "correct_answer", "knowledge_point", "needs_review")
                         if q.get(key) != pq.get(key)
                     }
-                    if not fields:
-                        continue
                     candidate = dict(q)
                     candidate.update(fields)
-                    if not q.get("overridden"):
+                    ambiguous = number_counts[store.normalize_number_key(pq.get("number"))] > 1
+                    if ambiguous:
+                        candidate["needs_review"] = True
+                        fields["needs_review"] = True
+                        if not q.get("overridden"):
+                            candidate["student_answer"] = None
+                            candidate["correct_answer"] = None
+                            candidate["status"] = "unknown"
+                            fields.update(student_answer=None, correct_answer=None, status="unknown")
+                    if not q.get("overridden") and not ambiguous:
                         regrade([candidate])
-                        fields["status"] = candidate["status"]
+                        if candidate["status"] != q["status"]:
+                            fields["status"] = candidate["status"]
+                    if not fields:
+                        continue
                     store.update_question(job_id, q["id"], **fields)
                     changed = True
                     updated = store.get_question(job_id, q["id"])
@@ -675,7 +887,10 @@ def complete_knowledge_points(paper_id: str, overwrite: bool = False) -> int:
         for q in batch:
             value = mapping.get(q["id"])
             if value and str(value).strip():
-                store.update_paper_question(paper_id, q["id"], knowledge_point=str(value).strip()[:200])
+                store.update_paper_question(
+                    paper_id, q["id"], knowledge_point=str(value).strip()[:200],
+                    mark_content_edited=False,
+                )
                 updated += 1
     if updated:
         regrade_paper_submissions(paper_id)
@@ -688,18 +903,39 @@ def complete_knowledge_points(paper_id: str, overwrite: bool = False) -> int:
 
 def grade_submission_questions(paper_questions: list[dict],
                                answers: dict[str, str]) -> list[dict]:
-    """用试卷题目 + 学生答案组装提交的题目列表并判分（纯代码，无 LLM）。"""
+    """用试卷题目 + 学生答案组装提交；重号 occurrence 不共享作答或答案。"""
+    normalized_answers: dict[str, str | None] = {}
+    for number, answer in answers.items():
+        key = store.normalize_number_key(number)
+        if not key:
+            continue
+        if (key in normalized_answers
+                and _answer_text(normalized_answers[key]) != _answer_text(answer)):
+            normalized_answers[key] = None
+        else:
+            normalized_answers[key] = answer
+    number_counts = Counter(
+        store.normalize_number_key(pq.get("number")) for pq in paper_questions
+        if store.normalize_number_key(pq.get("number"))
+    )
     questions = []
     for pq in paper_questions:
-        questions.append({
+        key = store.normalize_number_key(pq.get("number"))
+        ambiguous = bool(key) and number_counts[key] > 1
+        question = {
             "id": pq["id"], "number": pq["number"], "section": pq.get("section"),
             "type": pq.get("type"), "stem": pq.get("stem"),
             "options": pq.get("options"), "passage": pq.get("passage"),
-            "student_answer": answers.get(str(pq["number"])),
-            "correct_answer": pq.get("correct_answer"),
+            "student_answer": None if ambiguous else normalized_answers.get(key),
+            "correct_answer": None if ambiguous else pq.get("correct_answer"),
             "knowledge_point": pq.get("knowledge_point"), "status": "unknown",
-        })
+            "needs_review": bool(pq.get("needs_review") or ambiguous),
+        }
+        questions.append(question)
     _grade_all(questions)
+    for q in questions:
+        if number_counts[store.normalize_number_key(q.get("number"))] > 1:
+            q["status"] = "unknown"
     return questions
 
 
@@ -725,7 +961,7 @@ def process_submission(job_id: str) -> None:
         answers: dict[str, tuple[str, int]] = {}  # 题号 -> (答案, 置信度)
 
         def put(num, ans, conf) -> None:
-            n, a = str(num or "").strip(), str(ans or "").strip()
+            n, a = store.normalize_number_key(num), str(ans or "").strip()
             if not n or not a:
                 return
             # 未给置信度按 medium 算；显式 low（涂改/模糊）后面不直接判对错
@@ -750,22 +986,17 @@ def process_submission(job_id: str) -> None:
 
         for f, start, n in plans:
             sha = f.get("sha256")
-            full_cache = store.vision_cache_path(sha, "full") if sha else None
             pf = paper_files_by_sha.get(sha)
             if pf and paper_raw is not None:
                 ps, pc = pf.get("page_start") or 1, pf.get("page_count") or 0
-                for p in paper_raw:
-                    if ps <= (p.get("page") or 0) < ps + pc:
-                        if p.get("error"):
-                            failed_pages.add(p["page"])
-                            continue
-                        for q in p.get("questions") or []:
-                            put(q.get("number"), q.get("student_marked"),
-                                q.get("student_marked_confidence"))
-            elif full_cache and full_cache.exists():
-                for p in json.loads(full_cache.read_text(encoding="utf-8")):
-                    if p.get("error"):
-                        failed_pages.add(start + p["page"])
+                raw_by_page = {
+                    p["page"]: p for p in paper_raw
+                    if isinstance(p, dict) and type(p.get("page")) is int
+                }
+                for li in range(1, n + 1):
+                    p = raw_by_page.get(ps + li - 1) if li <= pc else None
+                    if p is None or p.get("error"):
+                        failed_pages.add(start + li)
                         continue
                     for q in p.get("questions") or []:
                         put(q.get("number"), q.get("student_marked"),
@@ -802,23 +1033,11 @@ def process_submission(job_id: str) -> None:
             questions = grade_submission_questions(paper_qs, {k: v[0] for k, v in answers.items()})
             low_nums = {k for k, v in answers.items() if v[1] <= _CONF["low"]}
             for q in questions:
-                if str(q["number"]) in low_nums and q["status"] in ("correct", "wrong"):
+                if (store.normalize_number_key(q["number"]) in low_nums
+                        and q["status"] in ("correct", "wrong")):
                     q["status"] = "unknown"
 
-            old_qs = {q["id"]: q for q in store.get_questions(job_id)}
-            for q in questions:
-                previous = old_qs.get(q["id"])
-                if not previous:
-                    continue
-                if previous.get("overridden"):
-                    q["student_answer"] = previous.get("student_answer")
-                    q["status"] = previous["status"]
-                    q["overridden"] = True
-                elif not q.get("student_answer") and previous.get("student_answer"):
-                    q["student_answer"] = previous["student_answer"]
-                    q["status"] = previous["status"]
-                if previous.get("knowledge_point") and not q.get("knowledge_point"):
-                    q["knowledge_point"] = previous["knowledge_point"]
+            _preserve_overrides(job_id, questions)
 
             failed = sorted(failed_pages)
             meta = {

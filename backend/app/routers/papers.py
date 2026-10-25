@@ -248,16 +248,16 @@ def delete_file(file_id: str, paper: dict = Depends(auth.get_owned_paper)):
 def add_question(req: PaperQuestionCreateRequest, paper: dict = Depends(auth.get_owned_paper)):
     if paper["status"] == "processing":
         raise HTTPException(409, "试卷正在识别中")
-    if len(store.get_paper_questions(paper["id"])) >= 200:
-        raise HTTPException(400, "题目数量已达上限")
-    number = req.number.strip()
-    if any(q["number"].casefold() == number.casefold() for q in store.get_paper_questions(paper["id"])):
-        raise HTTPException(409, f"题号 {number} 已存在")
     content = req.model_dump(exclude={"number", "correct_answer", "type"})
     ca = (req.correct_answer or "").strip() or None
-    result = store.add_paper_question(
-        paper["id"], number, ca, (req.type or "").strip() or None, content,
-    )
+    try:
+        result = store.add_paper_question(
+            paper["id"], req.number, ca, (req.type or "").strip() or None, content,
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f"题号 {req.number.strip()} 已存在") from None
+    except ValueError as exc:
+        raise HTTPException(422 if str(exc) == "题号不能为空" else 400, str(exc)) from None
     meta = dict(paper.get("meta") or {})
     if not meta.get("failed_pages"):
         store.update_paper(paper["id"], status="ready", error=None)
@@ -284,7 +284,14 @@ def patch_question(
             fields["correct_answer"] = fields["correct_answer"] or None
         if "options" in fields and not fields["options"]:
             fields["options"] = None
-        store.update_paper_question(paper["id"], qid, **fields)
+        try:
+            store.update_paper_question(paper["id"], qid, **fields)
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, f"题号 {fields.get('number', '').strip()} 已存在") from None
+        except ValueError as exc:
+            if str(exc) == "题号不能为空":
+                raise HTTPException(422, str(exc)) from None
+            raise
         regraded = pipeline.regrade_paper_submissions(paper["id"])
     return {"question": store.get_paper_question(paper["id"], qid), "regraded": regraded}
 

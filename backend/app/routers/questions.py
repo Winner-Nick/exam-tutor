@@ -44,13 +44,14 @@ def override_answer(
         q = store.get_question(job_id, qid)
         if not q:
             raise HTTPException(404, "题目不存在")
-        if req.status is None and req.student_answer is None:
+        answer_provided = "student_answer" in req.model_fields_set
+        if req.status is None and not answer_provided:
             raise HTTPException(400, "没有需要保存的修改")
         allowed = {"correct", "wrong", "unknown", "subjective"}
         if req.status is not None and req.status not in allowed:
             raise HTTPException(422, "无效的判分状态")
-        if req.student_answer is not None:
-            q["student_answer"] = req.student_answer.strip() or None
+        if answer_provided:
+            q["student_answer"] = (req.student_answer or "").strip() or None
         if req.status in allowed:
             q["status"] = req.status
         else:

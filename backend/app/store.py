@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 from .config import JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR, VISION_CACHE_VERSION
-from .db import get_conn, transaction
+from .db import get_conn, normalize_number_key, transaction
 
 
 class ProcessingLimitError(RuntimeError):
@@ -1023,6 +1023,7 @@ def _pq_row_to_dict(row) -> dict:
     return {
         "id": row["qid"],
         "number": row["number"],
+        "number_key": row["number_key"] if "number_key" in row.keys() else None,
         "section": row["section"],
         "type": row["type"],
         "stem": row["stem"],
@@ -1037,21 +1038,55 @@ def _pq_row_to_dict(row) -> dict:
     }
 
 
+def _replacement_number_keys(questions: list[dict]) -> list[str | None]:
+    counts: dict[str, int] = {}
+    for q in questions:
+        number = ("" if q.get("number") is None else str(q.get("number"))).strip()
+        q["number"] = number or None
+        key = normalize_number_key(number)
+        q["_number_key"] = key
+        counts[key] = counts.get(key, 0) + 1
+
+    used: set[str] = set()
+    result: list[str | None] = []
+    for q in questions:
+        key = q.pop("_number_key")
+        if not key:
+            q["needs_review"] = True
+            result.append(None)
+            continue
+        if counts[key] > 1:
+            q["correct_answer"] = None
+            q["needs_review"] = True
+        stored_key = key
+        if stored_key in used:
+            base = f"__examtutor_duplicate__:{q['id']}"
+            stored_key = base
+            serial = 2
+            while stored_key in used or stored_key in counts:
+                stored_key = f"{base}:{serial}"
+                serial += 1
+        used.add(stored_key)
+        result.append(stored_key)
+    return result
+
+
 def replace_paper_questions(paper_id: str, questions: list[dict]) -> None:
     qids = [q["id"] for q in questions]
     if len(qids) != len(set(qids)):
         raise ValueError("试卷题目 occurrence ID 重复")
+    number_keys = _replacement_number_keys(questions)
     conn = get_conn()
     with transaction():
         conn.execute("DELETE FROM paper_questions WHERE paper_id = ?", (paper_id,))
         conn.executemany(
-            """INSERT INTO paper_questions (paper_id, qid, number, section, type, stem,
-                   options_json, passage, correct_answer, knowledge_point, edited,
+            """INSERT INTO paper_questions (paper_id, qid, number, number_key, section, type,
+                   stem, options_json, passage, correct_answer, knowledge_point, edited,
                    manual_created, content_edited, needs_review)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
-                    paper_id, q["id"], q.get("number"), q.get("section"), q.get("type"),
+                    paper_id, q["id"], q.get("number"), number_key, q.get("section"), q.get("type"),
                     q.get("stem"),
                     json.dumps(q["options"], ensure_ascii=False)
                     if q.get("options") is not None else None,
@@ -1059,7 +1094,7 @@ def replace_paper_questions(paper_id: str, questions: list[dict]) -> None:
                     1 if q.get("edited") else 0, 1 if q.get("manual_created") else 0,
                     1 if q.get("content_edited") else 0, 1 if q.get("needs_review") else 0,
                 )
-                for q in questions
+                for q, number_key in zip(questions, number_keys, strict=True)
             ],
         )
 
@@ -1078,22 +1113,39 @@ def get_paper_question(paper_id: str, qid: str) -> dict | None:
     return _pq_row_to_dict(row) if row else None
 
 
+MAX_PAPER_QUESTIONS = 200
+
+
 def add_paper_question(paper_id: str, number: str, correct_answer: str | None,
-                       qtype: str | None, content: dict | None = None) -> dict | None:
+                       qtype: str | None, content: dict | None = None) -> dict:
     content = content or {}
+    number = ("" if number is None else str(number)).strip()
+    number_key = normalize_number_key(number)
+    if not number_key:
+        raise ValueError("题号不能为空")
     qid = "manual-" + uuid.uuid4().hex[:12]
+    conn = get_conn()
     with transaction():
-        get_conn().execute(
+        if conn.execute(
+            "SELECT COUNT(*) FROM paper_questions WHERE paper_id = ?", (paper_id,),
+        ).fetchone()[0] >= MAX_PAPER_QUESTIONS:
+            raise ValueError("题目数量已达上限")
+        existing_numbers = conn.execute(
+            "SELECT number FROM paper_questions WHERE paper_id = ?", (paper_id,),
+        ).fetchall()
+        if any(normalize_number_key(row["number"]) == number_key for row in existing_numbers):
+            raise sqlite3.IntegrityError("duplicate question number")
+        conn.execute(
             """INSERT INTO paper_questions
-               (paper_id, qid, number, section, type, stem, options_json, passage,
+               (paper_id, qid, number, number_key, section, type, stem, options_json, passage,
                 correct_answer, knowledge_point, edited, manual_created, content_edited)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)""",
-            (paper_id, qid, number, content.get("section"), qtype, content.get("stem"),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)""",
+            (paper_id, qid, number, number_key, content.get("section"), qtype, content.get("stem"),
              json.dumps(content["options"], ensure_ascii=False)
              if content.get("options") is not None else None,
              content.get("passage"), correct_answer, content.get("knowledge_point")),
         )
-    return get_paper_question(paper_id, qid)
+    return get_paper_question(paper_id, qid)  # type: ignore[return-value]
 
 
 def delete_paper_question(paper_id: str, qid: str) -> bool:
@@ -1121,7 +1173,8 @@ def list_paper_question_tombstones(paper_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def update_paper_question(paper_id: str, qid: str, **fields) -> None:
+def update_paper_question(paper_id: str, qid: str, *,
+                          mark_content_edited: bool = True, **fields) -> None:
     if "options" in fields:
         options = fields.pop("options")
         fields["options_json"] = json.dumps(options, ensure_ascii=False) if options is not None else None
@@ -1134,13 +1187,29 @@ def update_paper_question(paper_id: str, qid: str, **fields) -> None:
         raise ValueError(f"未知 paper question 字段: {bad}")
     if not fields:
         return
+    number_key = None
+    if "number" in fields:
+        fields["number"] = ("" if fields["number"] is None else str(fields["number"])).strip()
+        number_key = normalize_number_key(fields["number"])
+        if not number_key:
+            raise ValueError("题号不能为空")
+        fields["number_key"] = number_key
     if "correct_answer" in fields:
         fields["edited"] = 1
-    if set(fields) & {"number", "section", "type", "stem", "options_json", "passage", "knowledge_point"}:
+    content_fields = {"number", "section", "type", "stem", "options_json", "passage", "knowledge_point"}
+    if mark_content_edited and set(fields) & content_fields:
         fields["content_edited"] = 1
     keys = list(fields)
+    conn = get_conn()
     with transaction():
-        get_conn().execute(
+        if number_key is not None:
+            existing_numbers = conn.execute(
+                "SELECT number FROM paper_questions WHERE paper_id = ? AND qid != ?",
+                (paper_id, qid),
+            ).fetchall()
+            if any(normalize_number_key(row["number"]) == number_key for row in existing_numbers):
+                raise sqlite3.IntegrityError("duplicate question number")
+        conn.execute(
             f"UPDATE paper_questions SET {', '.join(k + ' = ?' for k in keys)} "
             "WHERE paper_id = ? AND qid = ?",
             [fields[k] for k in keys] + [paper_id, qid],

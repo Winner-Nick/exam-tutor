@@ -9,10 +9,18 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import unicodedata
 
 from .config import DATA_DIR
 
 DB_PATH = DATA_DIR / "app.db"
+
+
+def normalize_number_key(value) -> str:
+    return unicodedata.normalize(
+        "NFKC", "" if value is None else str(value),
+    ).strip().casefold()
+
 
 _local = threading.local()
 _init_lock = threading.Lock()
@@ -273,7 +281,59 @@ def _v9(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9]
+def _v10(conn: sqlite3.Connection) -> None:
+    """规范化试卷题号并加唯一索引；历史重号全部保留且转为人工核对。"""
+    _add_column_if_missing(conn, "paper_questions", "number_key", "TEXT")
+    conn.execute("DROP INDEX IF EXISTS idx_paper_questions_number_key")
+    rows = conn.execute(
+        "SELECT id, paper_id, number FROM paper_questions ORDER BY paper_id, id"
+    ).fetchall()
+    groups: dict[tuple[str, str], list[int]] = {}
+    paper_keys: dict[str, set[str]] = {}
+    for row_id, paper_id, number in rows:
+        key = normalize_number_key(number)
+        if key:
+            groups.setdefault((paper_id, key), []).append(row_id)
+            paper_keys.setdefault(paper_id, set()).add(key)
+    for (paper_id, key), row_ids in groups.items():
+        if len(row_ids) > 1:
+            conn.execute(
+                f"UPDATE paper_questions SET needs_review = 1, correct_answer = NULL "
+                f"WHERE paper_id = ? AND id IN ({','.join('?' for _ in row_ids)})",
+                [paper_id, *row_ids],
+            )
+
+    used: set[tuple[str, str]] = set()
+    for row_id, paper_id, number in rows:
+        key = normalize_number_key(number)
+        if not key:
+            conn.execute(
+                "UPDATE paper_questions SET number_key = NULL, needs_review = 1, "
+                "correct_answer = NULL WHERE id = ?",
+                (row_id,),
+            )
+            continue
+        stored_key = key
+        if (paper_id, stored_key) in used:
+            base = f"__examtutor_duplicate__:{row_id}"
+            stored_key = base
+            serial = 2
+            while ((paper_id, stored_key) in used
+                   or stored_key in paper_keys.get(paper_id, set())):
+                stored_key = f"{base}:{serial}"
+                serial += 1
+        conn.execute(
+            "UPDATE paper_questions SET number_key = ? WHERE id = ?",
+            (stored_key, row_id),
+        )
+        used.add((paper_id, stored_key))
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_questions_number_key "
+        "ON paper_questions(paper_id, number_key)"
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9, _v10]
 
 
 def init_db() -> None:

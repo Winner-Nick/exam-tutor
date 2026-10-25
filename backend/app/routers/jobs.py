@@ -69,8 +69,8 @@ async def create_submission(
         if use_paper_files:
             for pf in store.list_paper_files(paper_id):
                 src = store.paper_file_path(paper_id, pf["id"])
-                if not src:
-                    continue
+                if src is None or not src.is_file():
+                    raise HTTPException(400, f"复用的试卷源文件缺失: {pf.get('filename') or pf['id']}")
                 dest = store.job_dir(job_id) / "files" / (pf["id"] + src.suffix)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
