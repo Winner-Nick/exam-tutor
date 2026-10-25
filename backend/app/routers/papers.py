@@ -242,7 +242,7 @@ def delete_paper(paper: dict = Depends(auth.get_owned_paper)):
     return {"ok": True}
 
 
-def _retry_paper(paper: dict):
+def _retry_paper(paper: dict, *, force: bool = False):
     with store.paper_lock(paper["id"]):
         if not store.list_paper_files(paper["id"]):
             raise HTTPException(400, "没有可重新识别的文件，请先上传文件")
@@ -251,7 +251,7 @@ def _retry_paper(paper: dict):
                 raise HTTPException(409, "试卷正在识别中")
         except store.ProcessingLimitError:
             raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
-        workers.enqueue_paper(paper["id"])
+        workers.enqueue_paper(paper["id"], force=force)
     return {"ok": True}
 
 
@@ -262,7 +262,7 @@ def retry_paper(paper: dict = Depends(auth.get_owned_paper)):
 
 @router.post("/{paper_id}/reprocess", status_code=202)
 def reprocess_paper(paper: dict = Depends(auth.get_owned_paper)):
-    return _retry_paper(paper)
+    return _retry_paper(paper, force=True)
 
 
 @router.post("/{paper_id}/accept-partial")

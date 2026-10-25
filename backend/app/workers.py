@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import events, llm, pipeline, prompts, run_store, store
+from . import events, llm, llm_schemas, pipeline, prompts, run_store, store
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -84,24 +84,26 @@ def stop(timeout: float = 10.0) -> None:
         logger.info("后台 worker 已停止")
 
 
-def enqueue_paper(paper_id: str) -> None:
+def enqueue_paper(paper_id: str, *, force: bool = False) -> None:
     paper = store.get_paper(paper_id)
     if not paper:
         return
     run, created = run_store.enqueue_run(
-        "paper", paper_id, "process", paper["user_id"], max_attempts=5,
+        "paper", paper_id, "process", paper["user_id"],
+        options={"force": force}, max_attempts=5,
     )
     if created:
         _offer(run["id"])
 
 
-def enqueue_job(job_id: str) -> None:
+def enqueue_job(job_id: str, *, force: bool = False) -> None:
     job = store.get_job(job_id)
     if not job:
         return
     operation = "process_submission" if job["kind"] == "submission" else "process_legacy"
     run, created = run_store.enqueue_run(
-        "job", job_id, operation, job["user_id"], max_attempts=5,
+        "job", job_id, operation, job["user_id"],
+        options={"force": force}, max_attempts=5,
     )
     if created:
         _offer(run["id"])
@@ -243,7 +245,13 @@ def _execute_run_id(run_id: str) -> None:
 
 
 def _call_pipeline(function, resource_id: str, run: dict, **kwargs):
-    if "run" in inspect.signature(function).parameters:
+    parameters = inspect.signature(function).parameters
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+    if not accepts_kwargs:
+        kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+    if "run" in parameters:
         kwargs["run"] = run
     return function(resource_id, **kwargs)
 
@@ -257,7 +265,10 @@ def _execute_run(run: dict) -> None:
             return
         if paper["status"] != "processing":
             raise run_store.StaleRun("试卷已不在处理状态")
-        _call_pipeline(pipeline.process_paper, resource_id, run)
+        _call_pipeline(
+            pipeline.process_paper, resource_id, run,
+            force=bool(run["options"].get("force")),
+        )
     elif operation in ("process_submission", "process_legacy"):
         job = store.get_job(resource_id)
         if not job or job["status"] == "deleting":
@@ -265,9 +276,15 @@ def _execute_run(run: dict) -> None:
         if job["status"] != "processing":
             raise run_store.StaleRun("提交已不在处理状态")
         if operation == "process_submission" and job["kind"] == "submission":
-            _call_pipeline(pipeline.process_submission, resource_id, run)
+            _call_pipeline(
+                pipeline.process_submission, resource_id, run,
+                force=bool(run["options"].get("force")),
+            )
         elif operation == "process_legacy" and job["kind"] == "legacy":
-            _call_pipeline(pipeline.process_job, resource_id, run)
+            _call_pipeline(
+                pipeline.process_job, resource_id, run,
+                force=bool(run["options"].get("force")),
+            )
         else:
             raise run_store.StaleRun("任务类型与记录不一致")
     elif operation == "reconcile":
@@ -376,9 +393,7 @@ def _process_explain_batch(job_id: str, qids: list[str]) -> None:
     try:
         try:
             res = llm.deepseek_json(prompts.explain_system(store.get_job(job_id) or {}), prompts.explain_user(targets))
-            by_id = res.get("explanations") or {}
-            if not isinstance(by_id, dict):
-                raise TypeError("explanations 必须是对象")
+            by_id = llm_schemas.validate_explanations(res)
         except Exception:  # noqa: BLE001
             logger.exception("讲解模型调用失败 job=%s", job_id)
             by_id = {}

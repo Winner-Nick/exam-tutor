@@ -65,9 +65,16 @@ def health():
 def ready():
     try:
         get_conn().execute("SELECT 1").fetchone()
+        rows = get_conn().execute(
+            "SELECT status, COUNT(*) FROM task_runs "
+            "WHERE status IN ('queued', 'running', 'waiting') GROUP BY status"
+        ).fetchall()
     except Exception:
         return JSONResponse({"ok": False, "version": __version__, "database": "unavailable"}, status_code=503)
-    return JSONResponse({"ok": True, "version": __version__, "database": "ok"})
+    runs = {"queued": 0, "running": 0, "waiting": 0}
+    for row in rows:
+        runs[row["status"]] = row[1]
+    return JSONResponse({"ok": True, "version": __version__, "database": "ok", "runs": runs})
 
 
 @app.api_route(

@@ -18,7 +18,7 @@ import weakref
 from pathlib import Path
 
 from .config import JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR, VISION_CACHE_VERSION
-from .db import get_conn, normalize_number_key, transaction
+from .db import get_conn, normalize_number_key, read_snapshot, transaction
 
 
 class ProcessingLimitError(RuntimeError):
@@ -407,13 +407,14 @@ def list_jobs_page(user_id: int, student_id: int | None = None,
         sql += """ AND (j.title LIKE ? OR j.filename LIKE ? OR p.title LIKE ?
                        OR s.name LIKE ?)"""
         params.extend([f"%{q}%"] * 4)
-    total = get_conn().execute(f"SELECT COUNT(*) FROM ({sql})", params).fetchone()[0]
-    page_params = list(params)
-    sql += " ORDER BY j.created_at DESC, j.id DESC"
-    if limit is not None:
-        sql += " LIMIT ? OFFSET ?"
-        page_params.extend([limit, offset])
-    rows = get_conn().execute(sql, page_params).fetchall()
+    with read_snapshot():
+        total = get_conn().execute(f"SELECT COUNT(*) FROM ({sql})", params).fetchone()[0]
+        page_params = list(params)
+        sql += " ORDER BY j.created_at DESC, j.id DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            page_params.extend([limit, offset])
+        rows = get_conn().execute(sql, page_params).fetchall()
     return [_job_row_to_dict(r) for r in rows], total
 
 
@@ -969,13 +970,14 @@ def list_papers_page(user_id: int, q: str | None = None, limit: int | None = Non
     if q:
         sql += " AND (p.title LIKE ? OR p.subject LIKE ? OR p.grade LIKE ?)"
         params.extend([f"%{q}%"] * 3)
-    total = get_conn().execute(f"SELECT COUNT(*) FROM ({sql})", params).fetchone()[0]
-    page_params = list(params)
-    sql += " ORDER BY p.created_at DESC, p.id DESC"
-    if limit is not None:
-        sql += " LIMIT ? OFFSET ?"
-        page_params.extend([limit, offset])
-    rows = get_conn().execute(sql, page_params).fetchall()
+    with read_snapshot():
+        total = get_conn().execute(f"SELECT COUNT(*) FROM ({sql})", params).fetchone()[0]
+        page_params = list(params)
+        sql += " ORDER BY p.created_at DESC, p.id DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            page_params.extend([limit, offset])
+        rows = get_conn().execute(sql, page_params).fetchall()
     return [_paper_row_to_dict(r) for r in rows], total
 
 

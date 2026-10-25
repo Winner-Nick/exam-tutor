@@ -245,8 +245,7 @@ async def add_submission_files(
     return {"ok": True, "file_count": len(manifest), "remaining": MAX_FILES_PER_SUBMISSION - len(manifest)}
 
 
-@router.post("/jobs/{job_id}/retry", status_code=202)
-def retry_job(job: dict = Depends(auth.get_owned_job)):
+def _retry_job(job: dict, *, force: bool = False):
     with store.job_lock(job["id"]):
         if job["kind"] == "submission" and not store.job_files(job["id"]):
             raise HTTPException(400, "没有可重试的文件，请先上传")
@@ -257,8 +256,18 @@ def retry_job(job: dict = Depends(auth.get_owned_job)):
                 raise HTTPException(409, "正在处理中，请稍后重试")
         except store.ProcessingLimitError:
             raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
-        workers.enqueue_job(job["id"])
+        workers.enqueue_job(job["id"], force=force)
     return {"ok": True}
+
+
+@router.post("/jobs/{job_id}/retry", status_code=202)
+def retry_job(job: dict = Depends(auth.get_owned_job)):
+    return _retry_job(job)
+
+
+@router.post("/jobs/{job_id}/reprocess", status_code=202)
+def reprocess_job(job: dict = Depends(auth.get_owned_job)):
+    return _retry_job(job, force=True)
 
 
 @router.post("/jobs/{job_id}/accept-partial")

@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
 
-from . import prompts
+from . import llm_schemas, prompts
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,7 @@ def vision_extract_page(
     user: str | None = None,
     max_tokens: int = 6000,
     deadline: float | None = None,
+    schema_kind: str | None = None,
 ) -> dict:
     """用 DeepSeek 识别一页扫描图，返回结构化 dict。"""
 
@@ -137,7 +138,8 @@ def vision_extract_page(
 
     data = _retry(call, deadline=deadline)
     data["page"] = page_index
-    return data
+    kind = schema_kind or ("submission" if system == prompts.SUBMISSION_VISION_SYSTEM else "paper")
+    return llm_schemas.validate_vision_page(data, kind)
 
 
 def vision_extract_pages(
@@ -148,6 +150,7 @@ def vision_extract_pages(
     max_tokens: int = 6000,
     on_page: Callable[[dict], None] | None = None,
     stage_timeout: float = 600,
+    schema_kind: str | None = None,
 ) -> list[dict]:
     """有界并发识别多页，每页完成即可回调保存检查点。"""
     results: dict[int, dict] = {}
@@ -162,9 +165,11 @@ def vision_extract_pages(
             idx, url = next(page_iter)
         except StopIteration:
             return False
+        kwargs = {"schema_kind": schema_kind} if schema_kind is not None else {}
         future = pool.submit(
             vision_extract_page, url, idx, system,
             user_builder(idx) if user_builder else None, max_tokens, deadline,
+            **kwargs,
         )
         pending[future] = idx
         return True

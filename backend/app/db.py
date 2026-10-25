@@ -30,7 +30,7 @@ _initialized = False
 
 
 def _v1(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+    _execute_script(conn,
         """
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
@@ -113,10 +113,26 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, dd
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
+def _execute_script(conn: sqlite3.Connection, script: str) -> None:
+    """逐条执行 SQL，避免 executescript 在事务中隐式提交。"""
+    buffer = ""
+    for char in script:
+        buffer += char
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                conn.execute(statement)
+            buffer = ""
+    if buffer.strip():
+        if not sqlite3.complete_statement(buffer):
+            raise sqlite3.OperationalError("incomplete SQL statement")
+        conn.execute(buffer)
+
+
 def _v3(conn: sqlite3.Connection) -> None:
     """老师-学生-试卷模型：papers 持有题目与标准答案（识别一次复用），
     jobs 退化为一次"作答提交"（kind=submission），挂在 paper + student 下。"""
-    conn.executescript(
+    _execute_script(conn,
         """
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY,
@@ -186,7 +202,7 @@ def _v4(conn: sqlite3.Connection) -> None:
 
 def _v5(conn: sqlite3.Connection) -> None:
     """用户反馈：自动附带客户端诊断信息（设备/内核/报错），管理员可查看。"""
-    conn.executescript(
+    _execute_script(conn,
         """
         CREATE TABLE IF NOT EXISTS feedback (
             id INTEGER PRIMARY KEY,
@@ -253,7 +269,7 @@ def _v9(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "paper_questions", "manual_created", "INTEGER NOT NULL DEFAULT 0")
     _add_column_if_missing(conn, "paper_questions", "content_edited", "INTEGER NOT NULL DEFAULT 0")
     _add_column_if_missing(conn, "paper_questions", "needs_review", "INTEGER NOT NULL DEFAULT 0")
-    conn.executescript(
+    _execute_script(conn,
         """
         CREATE TABLE IF NOT EXISTS paper_question_tombstones (
             paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -424,7 +440,7 @@ def _v11(conn: sqlite3.Connection) -> None:
 
 def _v12(conn: sqlite3.Connection) -> None:
     """持久任务运行、资源活动互斥与创建幂等预留。"""
-    conn.executescript(
+    _execute_script(conn,
         """
         CREATE TABLE IF NOT EXISTS task_runs (
             id TEXT PRIMARY KEY,
@@ -471,7 +487,15 @@ def _v12(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9, _v10, _v11, _v12]
+def _v13(conn: sqlite3.Connection) -> None:
+    """复习记录按提交与题目查询的覆盖索引。"""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_review_attempts_job_qid "
+        "ON review_attempts(job_id, qid)"
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9, _v10, _v11, _v12, _v13]
 
 
 def init_db() -> None:
@@ -483,13 +507,20 @@ def init_db() -> None:
             return
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
+        conn.isolation_level = None
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             for i in range(version, len(MIGRATIONS)):
-                with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
                     MIGRATIONS[i](conn)
                     conn.execute(f"PRAGMA user_version = {i + 1}")
+                    conn.execute("COMMIT")
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
         finally:
             conn.close()
         _initialized = True
@@ -542,5 +573,27 @@ def transaction():
                     conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         finally:
             _local.tx_depth = depth
+
+    return scoped()
+
+
+def read_snapshot():
+    """只读快照；嵌套在写事务中时不另起事务。"""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def scoped():
+        conn = get_conn()
+        if conn.in_transaction:
+            yield conn
+            return
+        conn.execute("BEGIN")
+        try:
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
 
     return scoped()

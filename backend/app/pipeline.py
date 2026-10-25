@@ -1,16 +1,19 @@
 """核心处理流水线：渲染 -> 视觉识别 -> 汇总判分 -> 错题讲解。"""
 from __future__ import annotations
 
+import inspect
 import json
+import os
 import re
 import shutil
 import threading
 import unicodedata
+import uuid
 import weakref
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 
-from . import events, llm, pdf_utils, prompts, run_store, store
+from . import events, llm, llm_schemas, pdf_utils, prompts, run_store, store
 from .db import transaction
 
 _CONF = {"high": 3, "medium": 2, "low": 1}
@@ -646,7 +649,7 @@ def _preserve_overrides(job_id: str, questions: list[dict]) -> None:
     questions.sort(key=lambda q: _num_key(q.get("number")))
 
 
-def process_job(job_id: str, run: dict | None = None) -> None:
+def process_job(job_id: str, run: dict | None = None, force: bool = False) -> None:
     job = store.get_job(job_id)
     if not job:
         return
@@ -659,7 +662,7 @@ def process_job(job_id: str, run: dict | None = None) -> None:
         pages_dir = jd / "pages"
 
         # 0) 同内容 PDF 去重：直接复用旧作业的页面图与视觉识别结果（DeepSeek 成本为 0）
-        if not pages_cache.exists() and job.get("pdf_sha256"):
+        if not force and not pages_cache.exists() and job.get("pdf_sha256"):
             donor = store.find_reusable_job_by_sha(job["pdf_sha256"], job_id)
             if donor:
                 donor_dir = store.job_dir(donor)
@@ -675,7 +678,7 @@ def process_job(job_id: str, run: dict | None = None) -> None:
         store.update_job(job_id, page_count=len(imgs))
 
         # 2) 逐页视觉识别（空白页直接跳过；结果缓存，便于重跑与跨作业复用）
-        if pages_cache.exists():
+        if pages_cache.exists() and not force:
             pages = json.loads(pages_cache.read_text(encoding="utf-8"))
             # 含 error 的占位页是瞬时故障留下的；缺页（失败页不落缓存）同样需要重识
             have = {p.get("page") for p in pages}
@@ -774,30 +777,45 @@ def process_job(job_id: str, run: dict | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 def _render_files(owner_dir, files: list[dict], path_of) -> list[tuple[dict, int, int]]:
-    """把多个文件（PDF/照片）按上传顺序渲染为连续编号的页面图。
-
-    返回 [(file, page_start_offset, page_count)]。渲染是本地操作无 API 成本，
-    每次处理都重建，保证补传文件后页码连续。
-    """
+    """在 staging 完成全部渲染后切换正式 pages，失败保留上一份。"""
     pages_dir = owner_dir / "pages"
-    shutil.rmtree(pages_dir, ignore_errors=True)
+    token = uuid.uuid4().hex[:12]
+    staging = owner_dir / f"pages.staging-{token}"
+    backup = owner_dir / f"pages.backup-{token}"
     plans: list[tuple[dict, int, int]] = []
     page_no = 0
-    for f in files:
-        fpath = path_of(f["id"])
-        if fpath is None or not fpath.is_file():
-            raise FileNotFoundError(f"清单源文件缺失: {f.get('filename') or f['id']}")
-        if fpath.suffix.lower() == ".pdf":
-            n = len(pdf_utils.render_pdf_to_images(fpath, pages_dir, start_index=page_no))
-        else:
-            pdf_utils.photo_to_page(fpath, pages_dir, page_no + 1)
-            n = 1
-        plans.append((f, page_no, n))
-        page_no += n
-        from .config import settings
-        if page_no > settings.max_pages:
-            raise ValueError(f"累计 {page_no} 页，超过每次任务 {settings.max_pages} 页上限；请减少文件后重试")
-    return plans
+    try:
+        for f in files:
+            fpath = path_of(f["id"])
+            if fpath is None or not fpath.is_file():
+                raise FileNotFoundError(f"清单源文件缺失: {f.get('filename') or f['id']}")
+            if fpath.suffix.lower() == ".pdf":
+                n = len(pdf_utils.render_pdf_to_images(fpath, staging, start_index=page_no))
+            else:
+                pdf_utils.photo_to_page(fpath, staging, page_no + 1)
+                n = 1
+            plans.append((f, page_no, n))
+            page_no += n
+            from .config import settings
+            if page_no > settings.max_pages:
+                raise ValueError(f"累计 {page_no} 页，超过每次任务 {settings.max_pages} 页上限；请减少文件后重试")
+        if pages_dir.exists():
+            os.replace(pages_dir, backup)
+        try:
+            os.replace(staging, pages_dir)
+        except Exception:
+            if backup.exists() and not pages_dir.exists():
+                os.replace(backup, pages_dir)
+            raise
+        if backup.exists():
+            store.cleanup_path(backup)
+        return plans
+    except Exception:
+        if staging.exists():
+            store.cleanup_path(staging)
+        if backup.exists() and not pages_dir.exists():
+            os.replace(backup, pages_dir)
+        raise
 
 
 # 视觉缓存按 (sha, mode) 加进程内锁：两个 worker 处理含相同文件的不同提交时，
@@ -819,45 +837,84 @@ def _is_blank_entry(p: dict) -> bool:
     return bool(p.get("blank")) or "blank" in (p.get("page_role") or [])
 
 
+def _supports_on_page(vision_call) -> bool:
+    try:
+        parameters = inspect.signature(vision_call).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "on_page" or parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
 def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
-                       mode: str, vision_call, blank_result) -> list[dict]:
-    """识别文件的局部 1..n 页；缓存或模型缺页都会重识或返回 error 占位。"""
+                       mode: str, vision_call, blank_result,
+                       force: bool = False) -> list[dict]:
+    """识别局部 1..n 页；每页完成即写缓存检查点，force 仅跳过读取。"""
     cache = store.vision_cache_path(sha256, mode) if sha256 else None
     lock = _cache_lock_for(f"{sha256}:{mode}") if sha256 else threading.Lock()
     expected = set(range(1, n + 1))
     with lock:
         by_idx: dict[int, dict] = {}
+        previous_by_idx: dict[int, dict] = {}
         if cache and cache.exists():
             try:
                 cached = json.loads(cache.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 cached = None
             if isinstance(cached, list):
-                duplicates: set[int] = set()
-                for raw_page in cached:
-                    if not isinstance(raw_page, dict) or type(raw_page.get("page")) is not int:
-                        continue
-                    p = _normalize_full_page(raw_page) if mode == "full" else raw_page
-                    page = p["page"]
-                    if page not in expected:
-                        continue
-                    if page in by_idx:
-                        duplicates.add(page)
-                    else:
-                        by_idx[page] = p
-                for page in duplicates:
-                    del by_idx[page]
-                stale = set()
-                for page, p in by_idx.items():
-                    img = pages_dir / f"page_{start + page:02d}.jpg"
-                    if p.get("error") or (
-                            _is_blank_entry(p) and img.exists()
-                            and not pdf_utils.is_blank_page(img)):
-                        stale.add(page)
-                for page in stale:
-                    del by_idx[page]
-                if expected <= set(by_idx):
-                    return [by_idx[i] for i in range(1, n + 1)]
+                if force:
+                    for raw_page in cached:
+                        if not isinstance(raw_page, dict) or type(raw_page.get("page")) is not int:
+                            continue
+                        if raw_page["page"] in expected and not raw_page.get("error"):
+                            previous_by_idx[raw_page["page"]] = (
+                                _normalize_full_page(raw_page) if mode == "full" else raw_page
+                            )
+                else:
+                    duplicates: set[int] = set()
+                    for raw_page in cached:
+                        if not isinstance(raw_page, dict) or type(raw_page.get("page")) is not int:
+                            continue
+                        p = _normalize_full_page(raw_page) if mode == "full" else raw_page
+                        page = p["page"]
+                        if page not in expected:
+                            continue
+                        if page in by_idx:
+                            duplicates.add(page)
+                        else:
+                            by_idx[page] = p
+                    for page in duplicates:
+                        del by_idx[page]
+                    stale = set()
+                    for page, p in by_idx.items():
+                        img = pages_dir / f"page_{start + page:02d}.jpg"
+                        if p.get("error") or (
+                                _is_blank_entry(p) and img.exists()
+                                and not pdf_utils.is_blank_page(img)):
+                            stale.add(page)
+                    for page in stale:
+                        del by_idx[page]
+                    if expected <= set(by_idx):
+                        return [by_idx[i] for i in range(1, n + 1)]
+
+        def checkpoint() -> None:
+            if not cache:
+                return
+            cached_pages_by_idx = dict(previous_by_idx)
+            for page, result in by_idx.items():
+                if result.get("error"):
+                    continue
+                if mode == "full":
+                    result = _normalize_full_page(result)
+                    result.pop("answer_key", None)
+                    by_idx[page] = result
+                cached_pages_by_idx[page] = result
+            if cached_pages_by_idx:
+                store.write_json_atomic(
+                    cache, [cached_pages_by_idx[page] for page in sorted(cached_pages_by_idx)],
+                )
 
         payload = []
         for li in range(1, n + 1):
@@ -865,18 +922,33 @@ def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
                 continue
             img = pages_dir / f"page_{start + li:02d}.jpg"
             if pdf_utils.is_blank_page(img):
-                r = blank_result(li)
-                r["page"] = li
-                r["blank"] = True
-                by_idx[li] = r
+                result = blank_result(li)
+                result["page"] = li
+                result["blank"] = True
+                by_idx[li] = result
             else:
                 payload.append((li, pdf_utils.image_to_data_url(img)))
+        checkpoint()
         requested = {li for li, _ in payload}
+        reported: set[int] = set()
+
+        def accept_result(result: dict) -> None:
+            if not isinstance(result, dict) or type(result.get("page")) is not int:
+                return
+            page = result["page"]
+            if page not in requested or page in reported:
+                return
+            by_idx[page] = result
+            reported.add(page)
+            checkpoint()
+
         if payload:
-            for r in vision_call(payload):
-                if (isinstance(r, dict) and type(r.get("page")) is int
-                        and r["page"] in requested):
-                    by_idx[r["page"]] = r
+            if _supports_on_page(vision_call):
+                returned = vision_call(payload, on_page=accept_result)
+            else:
+                returned = vision_call(payload)
+            for result in returned:
+                accept_result(result)
         for li in expected - set(by_idx):
             by_idx[li] = {
                 "page": li, "error": "视觉识别未返回该页结果", "raw_text": "",
@@ -890,8 +962,7 @@ def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
                 normalized.pop("answer_key", None)
                 normalized_results.append(normalized)
             results = normalized_results
-        if cache:
-            store.write_json_atomic(cache, [p for p in results if not p.get("error")])
+        checkpoint()
         return results
 
 
@@ -986,7 +1057,7 @@ def _set_paper_progress(paper_id: str, stage: str, done: int, total: int, label:
     events.publish(paper_id, "progress", {"stage": stage, "done": done, "total": total, "label": label})
 
 
-def process_paper(paper_id: str, run: dict | None = None) -> None:
+def process_paper(paper_id: str, run: dict | None = None, force: bool = False) -> None:
     with store.paper_lock(paper_id):
         paper = store.get_paper(paper_id)
         if not paper:
@@ -1018,7 +1089,9 @@ def process_paper(paper_id: str, run: dict | None = None) -> None:
                                         f"正在识别第 {done_pages + done}/{page_count} 页…")
                 results = _vision_file_pages(
                     pd / "pages", start, n, f.get("sha256"), "full",
-                    lambda payload: llm.vision_extract_pages(payload, on_progress=prog), blank,
+                    lambda payload, on_page=None: llm.vision_extract_pages(
+                        payload, on_progress=prog, on_page=on_page,
+                    ), blank, force=force,
                 )
                 done_pages += n
                 for result in results:
@@ -1243,7 +1316,7 @@ def complete_knowledge_points(paper_id: str, overwrite: bool = False, *,
             prompts.KNOWLEDGE_SYSTEM + "\n" + prompts.tutor_context(paper),
             prompts.knowledge_user(batch), max_tokens=4000,
         )
-        mapping = result.get("knowledge_points") or {}
+        mapping = llm_schemas.validate_knowledge_points(result)
         for q in batch:
             value = mapping.get(q["id"])
             if value and str(value).strip():
@@ -1272,7 +1345,7 @@ def _answer_cache_mode(paper_id: str, revision: int) -> str:
     return f"ans-{paper_id}-r{revision}"
 
 
-def process_submission(job_id: str, run: dict | None = None) -> None:
+def process_submission(job_id: str, run: dict | None = None, force: bool = False) -> None:
     job = store.get_job(job_id)
     if not job:
         return
@@ -1342,7 +1415,7 @@ def process_submission(job_id: str, run: dict | None = None) -> None:
         for f, start, n in plans:
             sha = f.get("sha256")
             pf = paper_files_by_sha.get(sha)
-            if pf and paper_raw is not None:
+            if pf and paper_raw is not None and not force:
                 ps, pc = pf.get("page_start") or 1, pf.get("page_count") or 0
                 raw_by_page = {
                     p["page"]: p for p in paper_raw
@@ -1362,7 +1435,7 @@ def process_submission(job_id: str, run: dict | None = None) -> None:
                 def prog(done: int, total: int) -> None:
                     _set_progress(job_id, "vision", done_pages + done, page_count,
                                   f"正在识别第 {done_pages + done}/{page_count} 页…")
-                if sha and paper_revision == 1:
+                if sha and paper_revision == 1 and not force:
                     legacy_cache = store.vision_cache_path(sha, f"ans-{job['paper_id']}")
                     revision_cache = store.vision_cache_path(
                         sha, _answer_cache_mode(job["paper_id"], paper_revision),
@@ -1377,12 +1450,12 @@ def process_submission(job_id: str, run: dict | None = None) -> None:
                 results = _vision_file_pages(
                     jd / "pages", start, n, sha,
                     _answer_cache_mode(job["paper_id"], paper_revision),
-                    lambda payload: llm.vision_extract_pages(
-                        payload, on_progress=prog,
+                    lambda payload, on_page=None: llm.vision_extract_pages(
+                        payload, on_progress=prog, on_page=on_page,
                         system=prompts.SUBMISSION_VISION_SYSTEM,
                         user_builder=lambda i: prompts.submission_vision_user(i, ctx),
                         max_tokens=2500,
-                    ), blank,
+                    ), blank, force=force,
                 )
                 for p in results:
                     if p.get("error"):
