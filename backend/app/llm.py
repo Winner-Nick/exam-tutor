@@ -208,6 +208,27 @@ def vision_extract_pages(
 # 文本：DeepSeek
 # ---------------------------------------------------------------------------
 
+def _json_messages(system: str, user: str) -> list[dict]:
+    return [
+        {"role": "system", "content": "只输出合法 JSON，不要 Markdown 代码围栏。"},
+        {"role": "user", "content": f"{system}\n\n{user}"},
+    ]
+
+
+def _chat_messages(messages: list[dict]) -> list[dict]:
+    instructions = [str(message.get("content") or "") for message in messages
+                    if message.get("role") == "system" and message.get("content")]
+    if not instructions:
+        return messages
+    remaining = [dict(message) for message in messages if message.get("role") != "system"]
+    combined = "\n\n".join(instructions)
+    for message in remaining:
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            message["content"] = combined + "\n\n" + message["content"]
+            return remaining
+    return [{"role": "user", "content": combined}, *remaining]
+
+
 def deepseek_json(system: str, user: str, max_tokens: int = 8000,
                   deadline: float | None = None) -> dict:
     def call() -> dict:
@@ -218,10 +239,7 @@ def deepseek_json(system: str, user: str, max_tokens: int = 8000,
                 temperature=0,
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+                messages=_json_messages(system, user),
             )
         return _extract_json(_response_content("json", resp, started))
 
@@ -237,7 +255,7 @@ def deepseek_chat(messages: list[dict], max_tokens: int = 1500,
                 model=settings.deepseek_model,
                 temperature=0.4,
                 max_tokens=max_tokens,
-                messages=messages,
+                messages=_chat_messages(messages),
             )
         content = _response_content("chat", resp, started)
         if not content.strip():

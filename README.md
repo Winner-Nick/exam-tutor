@@ -166,9 +166,10 @@ cd frontend && npm install && cd ..
 
 ```bash
 .venv/bin/python -m backend.scripts.smoke_e2e --data-dir data/e2e-manual
+.venv/bin/python -m backend.scripts.smoke_sections --data-dir data/e2e-sections-manual
 ```
 
-该命令覆盖试卷识别、作答判分以及删除作答文件后的重跑，不会读取或修改现有学生数据。
+第一个命令覆盖试卷识别、作答判分以及删除作答文件后的重跑；第二个覆盖分节同号答案映射、强制重识、分节作答和真实答疑。两者都不会读取或修改现有学生数据。
 
 ## 备份与恢复
 

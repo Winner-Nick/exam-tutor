@@ -77,7 +77,8 @@ RENUMBER_SYSTEM = """你负责把题目 occurrence 与答案 occurrence 关联�
   "answer_mapping": [{"uid":"答案uid","question_uid":"目标题目uid或null","global":"13或null"}]
 }
 两组 mapping 必须覆盖全部输入。question_uid 能确定时优先填写；不能确定目标题时填 null，不要猜。
-global 无法确定也填 null。已是全卷题号则原样返回。"""
+global 无法确定也填 null。已是全卷题号则原样返回。
+示例：第1页 Section A 只有第1题，第2页 Section B 也只有第1题，且两节均从1开始，则两题的全局题号依次是1和2；答案页 Section A:1=B、Section B:1=A 也分别映射到全局1和2。若各节编号与页序能够这样唯一确定，不要返回 null。"""
 
 
 def renumber_user(compact: list[dict], answer_occurrences: list[dict] | dict[str, str]) -> str:

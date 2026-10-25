@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from ..db import transaction
 from .. import events, llm, llm_schemas, prompts, run_store, store
@@ -14,6 +15,9 @@ from .identity import (
     build_paper_questions,
 )
 from .shared import _assert_run, _set_progress, build_meta
+
+logger = logging.getLogger(__name__)
+
 
 def _set_paper_progress(paper_id: str, stage: str, done: int, total: int, label: str) -> None:
     store.set_paper_progress(paper_id, stage, done, total, label)
@@ -73,7 +77,7 @@ def process_paper(paper_id: str, run: dict | None = None, force: bool = False) -
                 try:
                     _renumber_pages(all_pages)
                 except Exception:  # noqa: BLE001
-                    pass
+                    logger.exception("试卷题号归一化失败 paper_id=%s", paper_id)
             _ensure_unique_numbers(all_pages)
             store.write_json_atomic(pd / "pages_raw.json", all_pages, indent=2)
             questions = _reconcile_paper_identity(paper_id, build_paper_questions(all_pages))
