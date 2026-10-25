@@ -8,10 +8,13 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import queue
 import threading
 
 from . import events, llm, pipeline, prompts, store
+
+logger = logging.getLogger(__name__)
 
 JOB_WORKERS = 2
 EXPLAIN_BATCH = 6  # 与 prompts.explain_user 的批量讲解能力匹配
@@ -82,8 +85,8 @@ def _job_worker() -> None:
                     pipeline.process_submission(item_id)
                 else:
                     pipeline.process_job(item_id)
-        except Exception:  # noqa: BLE001 - 处理函数已把错误落库并发事件
-            pass
+        except Exception:  # noqa: BLE001
+            logger.exception("后台任务失败 kind=%s id=%s", kind, item_id)
         finally:
             _job_q.task_done()
 
@@ -104,10 +107,14 @@ def _explain_worker() -> None:
                 deferred.append(item)
         for item in deferred:
             _explain_q.put(item)
+            _explain_q.task_done()
         try:
             _process_explain_batch(job_id, batch)
-        except Exception:  # noqa: BLE001 - 单批失败不影响队列继续
-            pass
+        except Exception:  # noqa: BLE001
+            logger.exception("讲解批处理失败 job=%s qids=%s", job_id, batch)
+        finally:
+            for _ in batch:
+                _explain_q.task_done()
 
 
 def _process_explain_batch(job_id: str, qids: list[str]) -> None:
@@ -125,23 +132,43 @@ def _process_explain_batch(job_id: str, qids: list[str]) -> None:
     if not targets:
         return
 
-    job = store.get_job(job_id) or {}
+    handled: set[str] = set()
     try:
-        res = llm.deepseek_json(prompts.explain_system(job), prompts.explain_user(targets))
-        by_id = res.get("explanations") or {}
-    except Exception:  # noqa: BLE001
-        by_id = {}
+        try:
+            res = llm.deepseek_json(prompts.explain_system(store.get_job(job_id) or {}), prompts.explain_user(targets))
+            by_id = res.get("explanations") or {}
+            if not isinstance(by_id, dict):
+                raise TypeError("explanations 必须是对象")
+        except Exception:  # noqa: BLE001
+            logger.exception("讲解模型调用失败 job=%s", job_id)
+            by_id = {}
 
-    for q in targets:
-        revision = q["revision"]
-        exp = by_id.get(q["id"])
-        with store.job_lock(job_id):
-            if exp:
-                written = store.write_explanation(
-                    job_id, q["id"], revision, exp, exp.get("knowledge_point"),
-                )
-                state = "done" if written else "stale"
-            else:
-                store.fail_explanation(job_id, q["id"], revision)
+        for q in targets:
+            revision = q["revision"]
+            try:
+                exp = by_id.get(q["id"])
+                if exp and not isinstance(exp, dict):
+                    raise TypeError("单题讲解必须是对象")
+                with store.job_lock(job_id):
+                    if exp:
+                        written = store.write_explanation(
+                            job_id, q["id"], revision, exp, exp.get("knowledge_point"),
+                        )
+                        state = "done" if written else "stale"
+                    else:
+                        store.fail_explanation(job_id, q["id"], revision)
+                        state = "failed"
+            except Exception:  # noqa: BLE001
+                logger.exception("讲解写入失败 job=%s qid=%s", job_id, q["id"])
+                with store.job_lock(job_id):
+                    store.fail_explanation(job_id, q["id"], revision)
                 state = "failed"
-        events.publish(job_id, "question_explained", {"qid": q["id"], "state": state})
+            handled.add(q["id"])
+            events.publish(job_id, "question_explained", {"qid": q["id"], "state": state})
+    finally:
+        for q in targets:
+            if q["id"] in handled:
+                continue
+            with store.job_lock(job_id):
+                store.fail_explanation(job_id, q["id"], q["revision"])
+            events.publish(job_id, "question_explained", {"qid": q["id"], "state": "failed"})
