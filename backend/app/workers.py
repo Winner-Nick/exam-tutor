@@ -112,42 +112,36 @@ def _explain_worker() -> None:
 
 def _process_explain_batch(job_id: str, qids: list[str]) -> None:
     targets = []
-    for qid in qids:
-        q = store.get_question(job_id, qid)
-        if not q or q["explain_state"] != "queued":
-            continue  # 已生成/正在生成（重复投递的高优先级条目落到这里）
-        if q["status"] not in ("wrong", "unknown"):
-            store.update_question(job_id, qid, explain_state="none")  # 改答后已不是错题
-            continue
-        store.update_question(job_id, qid, explain_state="generating")
-        targets.append(q)
+    with store.job_lock(job_id):
+        for qid in qids:
+            q = store.get_question(job_id, qid)
+            if not q or q["explain_state"] != "queued":
+                continue
+            if q["status"] not in ("wrong", "unknown"):
+                store.update_question(job_id, qid, explain_state="none")
+                continue
+            store.update_question(job_id, qid, explain_state="generating")
+            targets.append(q)
     if not targets:
         return
 
+    job = store.get_job(job_id) or {}
     try:
-        res = llm.deepseek_json(prompts.EXPLAIN_SYSTEM, prompts.explain_user(targets))
+        res = llm.deepseek_json(prompts.explain_system(job), prompts.explain_user(targets))
         by_id = res.get("explanations") or {}
     except Exception:  # noqa: BLE001
-        for q in targets:
-            store.update_question(job_id, q["id"], explain_state="failed")
-            events.publish(job_id, "question_explained", {"qid": q["id"], "state": "failed"})
-        return
+        by_id = {}
 
     for q in targets:
+        revision = q["revision"]
         exp = by_id.get(q["id"])
-        # 单题写回失败（如锁超时）不能拖垮整批：该题复位 failed，其余照常
-        try:
+        with store.job_lock(job_id):
             if exp:
-                fields = {"explanation": exp, "explain_state": "done"}
-                if exp.get("knowledge_point") and not q.get("knowledge_point"):
-                    fields["knowledge_point"] = exp["knowledge_point"]
-                store.update_question(job_id, q["id"], **fields)
-                events.publish(job_id, "question_explained", {"qid": q["id"], "state": "done"})
+                written = store.write_explanation(
+                    job_id, q["id"], revision, exp, exp.get("knowledge_point"),
+                )
+                state = "done" if written else "stale"
             else:
-                store.update_question(job_id, q["id"], explain_state="failed")
-                events.publish(job_id, "question_explained", {"qid": q["id"], "state": "failed"})
-        except Exception:  # noqa: BLE001
-            try:
-                store.update_question(job_id, q["id"], explain_state="failed")
-            except Exception:  # noqa: BLE001
-                pass
+                store.fail_explanation(job_id, q["id"], revision)
+                state = "failed"
+        events.publish(job_id, "question_explained", {"qid": q["id"], "state": state})

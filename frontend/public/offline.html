@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#b3402a" />
+  <title>暂时离线 · 错题家教</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f7f4ed; color: #28251f; font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    main { width: min(100%, 440px); padding: 32px; border: 1px solid #ded7c6; border-radius: 24px; background: #fffefa; text-align: center; box-shadow: 0 12px 36px -18px #28251f33; }
+    .seal { display: inline-grid; place-items: center; width: 56px; height: 56px; border-radius: 16px; background: #b3402a; color: white; font: 700 28px serif; }
+    h1 { margin: 20px 0 8px; font-size: 24px; }
+    p { color: #4f4a3d; line-height: 1.8; }
+    button { min-height: 44px; margin-top: 16px; padding: 10px 22px; border: 0; border-radius: 12px; background: #b3402a; color: white; font-weight: 600; cursor: pointer; }
+    small { display: block; margin-top: 16px; color: #6f695a; line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="seal">错</div>
+    <h1>暂时无法连接服务器</h1>
+    <p>你当前可能处于离线状态，或服务器暂时不可达。已保存在服务器上的试卷和批改记录仍然安全。</p>
+    <button onclick="location.reload()">重新连接</button>
+    <small>为保护隐私，离线模式不缓存学生作答、聊天或个人学习数据。请恢复网络后继续使用。</small>
+  </main>
+</body>
+</html>

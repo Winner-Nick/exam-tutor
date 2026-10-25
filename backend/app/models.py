@@ -21,12 +21,12 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=32)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class ChangePasswordRequest(BaseModel):
-    old_password: str
+    old_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
 
 
@@ -37,14 +37,38 @@ class InviteCreateRequest(BaseModel):
 
 class StudentRequest(BaseModel):
     name: str = Field(min_length=1, max_length=32)
+    grade: str | None = Field(default=None, max_length=30)
 
 
 class PaperUpdateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=80)
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    subject: str | None = Field(default=None, max_length=30)
+    grade: str | None = Field(default=None, max_length=30)
 
 
 class PaperAnswerRequest(BaseModel):
     correct_answer: str | None = Field(default=None, max_length=500)
+
+
+class PaperQuestionPatchRequest(BaseModel):
+    number: str | None = Field(default=None, min_length=1, max_length=20)
+    type: str | None = Field(default=None, max_length=30)
+    stem: str | None = Field(default=None, max_length=10000)
+    options: dict[str, str] | None = None
+    passage: str | None = Field(default=None, max_length=20000)
+    correct_answer: str | None = Field(default=None, max_length=500)
+    knowledge_point: str | None = Field(default=None, max_length=200)
+
+
+class KnowledgePointsRequest(BaseModel):
+    items: dict[str, str | None] | None = None
+    overwrite: bool = False
+
+
+class ReviewRequest(BaseModel):
+    action: str = Field(pattern=r"^(attempt|mastered|reopen)$")
+    answer: str | None = Field(default=None, max_length=2000)
+    result: str | None = Field(default=None, pattern=r"^(correct|wrong)$")
 
 
 class FeedbackRequest(BaseModel):
@@ -54,9 +78,14 @@ class FeedbackRequest(BaseModel):
 
 
 class PaperQuestionCreateRequest(BaseModel):
-    number: str = Field(min_length=1, max_length=10, pattern=r"^[0-9A-Za-z（）()．.\-]+$")
+    number: str = Field(min_length=1, max_length=20)
     correct_answer: str | None = Field(default=None, max_length=500)
-    type: str | None = Field(default=None, max_length=20)
+    type: str | None = Field(default=None, max_length=30)
+    section: str | None = Field(default=None, max_length=100)
+    stem: str | None = Field(default=None, max_length=10000)
+    options: dict[str, str] | None = None
+    passage: str | None = Field(default=None, max_length=20000)
+    knowledge_point: str | None = Field(default=None, max_length=200)
 
 
 class StudentAccountRequest(BaseModel):
@@ -65,4 +94,8 @@ class StudentAccountRequest(BaseModel):
 
 
 class StudentAccountPasswordRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AdminPasswordRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)

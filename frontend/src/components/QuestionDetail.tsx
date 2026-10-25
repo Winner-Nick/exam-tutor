@@ -1,147 +1,174 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
-import { useToast } from './Toast'
-import { ExplanationCard } from './ExplanationCard'
-import { StatusBadge } from './StatusBadge'
+import { useSerialTasks } from '../hooks/useSerialTasks'
 import type { Job, Question } from '../types'
+import { invalidateLearningData } from '../utils/query'
+import { ExplanationCard } from './ExplanationCard'
+import { Icon } from './Icon'
+import { StatusBadge } from './StatusBadge'
+import { useToast } from './Toast'
 
 export function QuestionDetail({
   job,
   question,
   canEdit = true,
+  onAsk,
 }: {
   job: Job
   question: Question
-  /** 老师才能人工核对/改判；学生只读查看 */
   canEdit?: boolean
+  onAsk?: () => void
 }) {
   const qc = useQueryClient()
   const toast = useToast()
+  const { busy, enqueue } = useSerialTasks()
   const [showPassage, setShowPassage] = useState(false)
+  const [answerDraft, setAnswerDraft] = useState(question.student_answer ?? '')
+
+  useEffect(() => {
+    setAnswerDraft(question.student_answer ?? '')
+    setShowPassage(false)
+  }, [question.id, question.revision, question.student_answer])
 
   const patchQuestion = (updated: Question, stats: Job['stats']) => {
-    qc.setQueryData<Job>(['job', job.id], (old) =>
-      old
-        ? {
-            ...old,
-            stats,
-            questions: old.questions?.map((x) => (x.id === updated.id ? updated : x)),
-          }
-        : old,
-    )
+    qc.setQueryData<Job>(['job', job.id], (old) => old ? {
+      ...old,
+      stats,
+      questions: old.questions?.map((item) => item.id === updated.id ? updated : item),
+    } : old)
   }
 
-  const override = useMutation({
-    mutationFn: (body: { student_answer?: string | null; status?: string }) =>
-      api.override(job.id, question.id, body),
-    onSuccess: ({ question: updated, stats }) => {
-      patchQuestion(updated, stats)
-      toast('已更新')
-    },
-    onError: (e) => toast(e instanceof ApiError ? e.message : '更新失败', 'error'),
-  })
+  const updateOverride = async (body: { student_answer?: string | null; status?: string }) => {
+    try {
+      await enqueue(async () => {
+        const { question: updated, stats } = await api.override(job.id, question.id, body)
+        patchQuestion(updated, stats)
+        await invalidateLearningData(qc)
+      })
+      toast('作答与判分已更新')
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : '更新失败，请重试', 'error')
+    }
+  }
 
-  const explain = useMutation({
-    mutationFn: () => api.requestExplain(job.id, question.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['job', job.id] }),
-  })
+  const requestExplanation = async () => {
+    try {
+      await enqueue(async () => {
+        await api.requestExplain(job.id, question.id)
+        await qc.invalidateQueries({ queryKey: ['job', job.id] })
+      })
+      toast('讲解已加入生成队列')
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : '无法生成讲解，请重试', 'error')
+    }
+  }
 
   const opts = question.options ? Object.entries(question.options) : []
+  const answerDirty = answerDraft !== (question.student_answer ?? '')
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" aria-busy={busy}>
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-serif text-lg font-bold">第 {question.number} 题</h3>
+        <h2 className="font-serif text-lg font-bold">第 {question.number} 题</h2>
         <StatusBadge status={question.status} />
-        {question.section && (
-          <span className="text-xs text-dim">
-            {question.section}
-            {question.type && question.type !== question.section ? ` · ${question.type}` : ''}
-          </span>
-        )}
-        {question.knowledge_point && (
-          <span className="badge bg-surface-2 text-ink2">{question.knowledge_point}</span>
+        {question.section && <span className="text-xs text-dim">{question.section}{question.type && question.type !== question.section ? ` · ${question.type}` : ''}</span>}
+        {question.knowledge_point && <span className="badge bg-surface-2 text-ink2">{question.knowledge_point}</span>}
+        {onAsk && (
+          <button onClick={onAsk} className="btn-outline ml-auto px-3 text-xs">
+            <Icon name="chat" size={14} /> 问这道题
+          </button>
         )}
       </div>
 
       {question.passage && (
         <div className="rounded-xl bg-surface-2 p-3 text-sm">
-          <button
-            onClick={() => setShowPassage((v) => !v)}
-            className="text-xs font-medium text-primary-600 dark:text-primary-400"
-          >
+          <button onClick={() => setShowPassage((value) => !value)} aria-expanded={showPassage} className="min-h-11 text-xs font-medium text-primary-700 dark:text-primary-300">
             {showPassage ? '收起原文 ▲' : '展开原文 ▼'}
           </button>
-          {showPassage && (
-            <p className="mt-2 leading-relaxed whitespace-pre-wrap text-ink2">{question.passage}</p>
-          )}
+          {showPassage && <p className="mt-2 leading-relaxed whitespace-pre-wrap text-ink2">{question.passage}</p>}
         </div>
       )}
 
-      {question.stem && <p className="leading-relaxed whitespace-pre-wrap">{question.stem}</p>}
+      {question.stem ? <p className="leading-relaxed whitespace-pre-wrap">{question.stem}</p> : <p className="text-sm text-dim">未识别到题干，可在试卷库中补全。</p>}
+
+      <dl className="grid gap-2 rounded-xl border border-line bg-surface-2/60 p-3 text-sm sm:grid-cols-2">
+        <div>
+          <dt className="text-xs text-dim">学生答案</dt>
+          <dd className="mt-1 whitespace-pre-wrap text-ink">{question.student_answer?.trim() || '未作答 / 未识别'}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-dim">标准答案</dt>
+          <dd className="mt-1 whitespace-pre-wrap text-ink">{question.correct_answer?.trim() || '未提供，需人工确认'}</dd>
+        </div>
+      </dl>
 
       {opts.length > 0 && (
         <div className="space-y-1.5">
-          {opts.map(([k, v]) => {
-            const isStudent = question.student_answer === k
-            const isCorrect = question.correct_answer === k
-            return (
-              <button
-                key={k}
-                disabled={override.isPending}
-                onClick={() => canEdit && override.mutate({ student_answer: k })}
-                title={canEdit ? '点击把它设为学生的作答' : undefined}
-                className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left text-sm transition-all disabled:opacity-60 ${
-                  isCorrect
-                    ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20'
-                    : isStudent
-                      ? 'border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20'
-                      : canEdit
-                        ? 'border-line bg-surface hover:border-primary-300 dark:hover:border-primary-700'
-                        : 'cursor-default border-line bg-surface'
-                }`}
-              >
-                <span
-                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                    isCorrect
-                      ? 'bg-emerald-500 text-white'
-                      : isStudent
-                        ? 'bg-rose-500 text-white'
-                        : 'bg-surface-2 text-dim'
-                  }`}
-                >
-                  {k}
-                </span>
-                <span className="flex-1">{v}</span>
+          {opts.map(([key, value]) => {
+            const isStudent = question.student_answer === key
+            const isCorrect = question.correct_answer === key
+            const className = `flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left text-sm ${
+              isCorrect
+                ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20'
+                : isStudent
+                  ? 'border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20'
+                  : 'border-line bg-surface'
+            } ${canEdit ? 'min-h-11 hover:border-primary-300 dark:hover:border-primary-700' : ''}`
+            const content = (
+              <>
+                <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isCorrect ? 'bg-emerald-600 text-white' : isStudent ? 'bg-rose-600 text-white' : 'bg-surface-2 text-ink2'}`}>{key}</span>
+                <span className="flex-1">{value}</span>
                 <span className="shrink-0 space-x-1 text-xs">
-                  {isStudent && <span className="text-rose-500">学生选</span>}
-                  {isCorrect && <span className="text-emerald-600">✓ 正确</span>}
+                  {isStudent && <span className="text-rose-700 dark:text-rose-300">学生选</span>}
+                  {isCorrect && <span className="text-emerald-700 dark:text-emerald-300">✓ 正确</span>}
                 </span>
-              </button>
+              </>
+            )
+            return canEdit ? (
+              <button key={key} type="button" disabled={busy} onClick={() => void updateOverride({ student_answer: key })} className={className}>{content}</button>
+            ) : (
+              <div key={key} className={className}>{content}</div>
             )
           })}
         </div>
       )}
 
+      {canEdit && opts.length === 0 && (
+        <div className="space-y-2 rounded-xl border border-line p-3">
+          <label htmlFor={`student-answer-${question.id}`} className="text-sm font-medium text-ink2">修正文本作答</label>
+          <textarea
+            id={`student-answer-${question.id}`}
+            value={answerDraft}
+            onChange={(event) => setAnswerDraft(event.target.value)}
+            rows={3}
+            className="input"
+            placeholder="输入学生实际作答；留空表示未作答"
+          />
+          <button
+            disabled={!answerDirty || busy}
+            onClick={() => void updateOverride({ student_answer: answerDraft.trim() || null })}
+            className="btn-primary px-4"
+          >
+            保存作答
+          </button>
+        </div>
+      )}
+
       {canEdit && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-dim">人工核对：</span>
-          {(['correct', 'wrong', 'unknown'] as const).map((st) => (
-            <button
-              key={st}
-              disabled={override.isPending || question.status === st}
-              onClick={() => override.mutate({ status: st })}
-              className="btn-outline rounded-lg px-2.5 py-1 text-xs disabled:opacity-40"
-            >
-              标为{st === 'correct' ? '答对' : st === 'wrong' ? '答错' : '待确认'}
+          <span className="text-ink2">人工核对：</span>
+          {(['correct', 'wrong', 'unknown'] as const).map((status) => (
+            <button key={status} disabled={busy || question.status === status} onClick={() => void updateOverride({ status })} className="btn-outline px-3 text-xs">
+              标为{status === 'correct' ? '答对' : status === 'wrong' ? '答错' : '待确认'}
             </button>
           ))}
         </div>
       )}
 
+      {busy && <p className="text-xs text-ink2" role="status">正在按顺序保存，请稍候…</p>}
       {(question.status === 'wrong' || question.status === 'unknown' || question.explanation) && (
-        <ExplanationCard question={question} onRequestExplain={() => explain.mutate()} />
+        <ExplanationCard question={question} pending={busy} onRequestExplain={() => void requestExplanation()} />
       )}
     </div>
   )

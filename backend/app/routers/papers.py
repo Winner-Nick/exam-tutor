@@ -1,4 +1,4 @@
-"""试卷库路由：上传（题目/答案可分多文件、可补传）、核对答案、页面图、SSE。"""
+"""试卷、文件、题目编辑、识别恢复与知识点管理。"""
 from __future__ import annotations
 
 import sqlite3
@@ -8,47 +8,86 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from .. import auth, events, pipeline, security, store, workers
 from ..config import settings
-from ..models import PaperAnswerRequest, PaperQuestionCreateRequest, PaperUpdateRequest
+from ..models import (
+    KnowledgePointsRequest,
+    PaperQuestionCreateRequest,
+    PaperQuestionPatchRequest,
+    PaperUpdateRequest,
+)
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
-MAX_FILES_PER_REQUEST = 30  # 逐页拍照的试卷轻松超过 5 张；页数总闸由 MAX_PAGES 把守
+MAX_FILES_PER_REQUEST = 30
 _FILE_KINDS = {"mixed", "questions", "answers"}
 
 
+def _public(paper: dict, full: bool = False) -> dict:
+    paper.pop("user_id", None)
+    meta = paper.get("meta") or {}
+    paper["failed_pages"] = meta.get("failed_pages") or []
+    paper["accepted_partial"] = bool(meta.get("accepted_partial"))
+    if full:
+        paper["questions"] = store.get_paper_questions(paper["id"])
+        paper["files"] = [
+            {"id": f["id"], "kind": f["kind"], "filename": f["filename"],
+             "page_start": f["page_start"], "page_count": f["page_count"]}
+            for f in store.list_paper_files(paper["id"])
+        ]
+    return paper
+
+
 async def _save_paper_files(paper_id: str, files: list[UploadFile], kind: str) -> None:
-    """逐个落盘并登记。任何一个失败则整体回滚由调用方负责。"""
-    for f in files:
-        fid = store.add_paper_file(paper_id, kind, f.filename, None)
-        dest_stem = store.paper_dir(paper_id) / "files" / fid
-        try:
-            _, sha = await security.save_upload(f, dest_stem, allow_pdf=True, allow_image=True)
-        except Exception:
-            store.delete_paper_file(fid)  # 不留幽灵登记行
-            raise
-        store.set_paper_file_sha(fid, sha)
+    created: list[str] = []
+    try:
+        for f in files:
+            fid = store.add_paper_file(paper_id, kind, f.filename, None)
+            created.append(fid)
+            _, sha = await security.save_upload(
+                f, store.paper_dir(paper_id) / "files" / fid,
+                allow_pdf=True, allow_image=True,
+            )
+            store.set_paper_file_sha(fid, sha)
+    except Exception:
+        for fid in created:
+            path = store.paper_file_path(paper_id, fid)
+            if path:
+                path.unlink(missing_ok=True)
+            store.delete_paper_file(fid, paper_id)
+        raise
+
+
+def _mark_partial(paper: dict, message: str) -> None:
+    meta = dict(paper.get("meta") or {})
+    meta["accepted_partial"] = False
+    store.update_paper(paper["id"], status="partial", error=message, meta=meta)
 
 
 @router.post("", status_code=201)
 async def create_paper(
     files: list[UploadFile] = File(...),
     title: str | None = Form(default=None),
+    subject: str | None = Form(default=None),
+    grade: str | None = Form(default=None),
     kind: str = Form(default="mixed"),
     user: dict = Depends(auth.require_teacher),
 ):
     security.hit(f"paper:{user['id']}", 10, 3600, "上传过于频繁，请 1 小时后再试")
-    if store.count_processing_papers(user["id"]) >= settings.max_processing_per_user:
-        raise HTTPException(429, "已有试卷正在识别中，请稍后再上传")
     if not files or len(files) > MAX_FILES_PER_REQUEST:
         raise HTTPException(400, f"一次最多上传 {MAX_FILES_PER_REQUEST} 个文件")
     if kind not in _FILE_KINDS:
         raise HTTPException(400, "无效的文件类型标记")
-
     paper_id = store.new_job_id()
-    store.create_paper(paper_id, user["id"], (title or "").strip() or None)
     try:
+        store.create_paper(
+            paper_id, user["id"], (title or "").strip() or None,
+            (subject or "").strip() or None, (grade or "").strip() or None,
+            max_processing=settings.max_processing_per_user,
+        )
         await _save_paper_files(paper_id, files, kind)
-    except HTTPException:
+    except store.ProcessingLimitError:
+        store.delete_paper(paper_id)
+        raise HTTPException(429, "已有任务正在处理中，请稍后再试") from None
+    except Exception:
         store.delete_paper(paper_id)
         raise
     workers.enqueue_paper(paper_id)
@@ -57,13 +96,103 @@ async def create_paper(
 
 @router.post("/manual", status_code=201)
 def create_manual_paper(req: PaperUpdateRequest, user: dict = Depends(auth.require_teacher)):
-    """不传文件、纯手动录入题号和答案的试卷（适合只有答案没有卷子的场景）。"""
+    if not req.title or not req.title.strip():
+        raise HTTPException(422, "试卷名称不能为空")
     paper_id = store.new_job_id()
-    store.create_paper(paper_id, user["id"], req.title.strip())
-    store.update_paper(paper_id, status="ready", stage="done",
-                       progress_done=1, progress_total=1, progress_label="完成",
-                       meta={"title": req.title.strip(), "total_questions": 0})
+    store.create_paper(
+        paper_id, user["id"], req.title.strip(),
+        (req.subject or "").strip() or None, (req.grade or "").strip() or None,
+    )
+    store.update_paper(
+        paper_id, status="partial", stage="done", error="请先添加至少一道题目",
+        progress_done=1, progress_total=1, progress_label="等待录入题目",
+        meta={"title": req.title.strip(), "total_questions": 0},
+    )
     return {"paper_id": paper_id}
+
+
+@router.get("")
+def list_papers(
+    q: str | None = None, limit: int = 100, offset: int = 0,
+    user: dict = Depends(auth.get_current_user),
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    if user["role"] == "student":
+        papers, total = store.list_papers_page(
+            user["teacher_id"], q=q, limit=limit, offset=offset, ready_only=True,
+        )
+        return {"papers": [{
+            "id": p["id"], "title": p["title"], "status": p["status"],
+            "subject": p.get("subject"), "grade": p.get("grade"),
+            "question_count": p["question_count"], "answered_count": p["answered_count"],
+        } for p in papers], "total": total, "limit": limit, "offset": offset}
+    papers, total = store.list_papers_page(user["id"], q=q, limit=limit, offset=offset)
+    return {"papers": [_public(p) for p in papers], "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/{paper_id}")
+def get_paper(paper: dict = Depends(auth.get_owned_paper)):
+    return _public(paper, full=True)
+
+
+@router.patch("/{paper_id}")
+def update_paper(req: PaperUpdateRequest, paper: dict = Depends(auth.get_owned_paper)):
+    fields = {}
+    if req.title is not None:
+        if not req.title.strip():
+            raise HTTPException(422, "试卷名称不能为空")
+        fields["title"] = req.title.strip()
+    if req.subject is not None:
+        fields["subject"] = req.subject.strip() or None
+    if req.grade is not None:
+        fields["grade"] = req.grade.strip() or None
+    store.update_paper(paper["id"], **fields)
+    return _public(store.get_paper(paper["id"]))
+
+
+@router.delete("/{paper_id}")
+def delete_paper(paper: dict = Depends(auth.get_owned_paper)):
+    if paper["status"] == "processing":
+        raise HTTPException(409, "试卷正在识别中，暂不能删除")
+    if store.list_submission_ids_for_paper(paper["id"]):
+        raise HTTPException(409, "该试卷已有批改记录，请先在批改列表筛选并删除对应记录")
+    try:
+        store.delete_paper(paper["id"])
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "该试卷已有批改记录，请先删除对应记录") from None
+    return {"ok": True}
+
+
+def _retry_paper(paper: dict):
+    if not store.list_paper_files(paper["id"]):
+        raise HTTPException(400, "没有可重新识别的文件，请先上传文件")
+    if not store.try_mark_paper_processing(paper["id"]):
+        raise HTTPException(409, "试卷正在识别中")
+    workers.enqueue_paper(paper["id"])
+    return {"ok": True}
+
+
+@router.post("/{paper_id}/retry", status_code=202)
+def retry_paper(paper: dict = Depends(auth.get_owned_paper)):
+    return _retry_paper(paper)
+
+
+@router.post("/{paper_id}/reprocess", status_code=202)
+def reprocess_paper(paper: dict = Depends(auth.get_owned_paper)):
+    return _retry_paper(paper)
+
+
+@router.post("/{paper_id}/accept-partial")
+def accept_partial(paper: dict = Depends(auth.get_owned_paper)):
+    if paper["status"] != "partial":
+        raise HTTPException(409, "当前试卷不是部分识别状态")
+    if not store.get_paper_questions(paper["id"]):
+        raise HTTPException(409, "至少保留一道题目后才能接受部分结果")
+    meta = dict(paper.get("meta") or {})
+    meta["accepted_partial"] = True
+    store.update_paper(paper["id"], status="ready", error=None, meta=meta)
+    return {"ok": True}
 
 
 @router.post("/{paper_id}/files", status_code=202)
@@ -72,144 +201,125 @@ async def add_files(
     kind: str = Form(default="answers"),
     paper: dict = Depends(auth.get_owned_paper),
 ):
-    """补传文件（典型场景：答案在另一份 PDF/照片里）。上传后整卷重新汇总，
-    已核对的答案会保留，已识别过的文件走缓存不重复花钱。"""
     if not files or len(files) > MAX_FILES_PER_REQUEST:
         raise HTTPException(400, f"一次最多上传 {MAX_FILES_PER_REQUEST} 个文件")
     if kind not in _FILE_KINDS:
         raise HTTPException(400, "无效的文件类型标记")
-    # 原子占位：双击/重试的并发请求只有一个能进入，防同卷被并发处理
     if not store.try_mark_paper_processing(paper["id"]):
         raise HTTPException(409, "试卷正在识别中，请稍后再补传")
     prev_status = paper["status"]
     try:
         await _save_paper_files(paper["id"], files, kind)
     except Exception:
-        # 上传失败：恢复占位前的状态，让试卷可用
-        store.update_paper(paper["id"], status=prev_status, stage="done",
-                           progress_done=1, progress_total=1, progress_label="完成")
+        store.update_paper(
+            paper["id"], status=prev_status, stage="done",
+            progress_done=1, progress_total=1, progress_label="已恢复",
+        )
         raise
     workers.enqueue_paper(paper["id"])
-    return {"ok": True}
+    return {"ok": True, "file_count": len(store.list_paper_files(paper["id"]))}
 
 
-@router.get("")
-def list_papers(user: dict = Depends(auth.get_current_user)):
-    # 学生账号：只见所属老师已就绪的试卷（仅选题所需的最小字段，不含答案）
-    if user["role"] == "student":
-        papers = [
-            {"id": p["id"], "title": p["title"], "status": p["status"],
-             "question_count": p["question_count"], "answered_count": p["answered_count"]}
-            for p in store.list_papers(user["teacher_id"])
-            if p["status"] == "ready"
-        ]
-        return {"papers": papers}
-    return {"papers": store.list_papers(user["id"])}
-
-
-@router.get("/{paper_id}")
-def get_paper(paper: dict = Depends(auth.get_owned_paper)):
-    paper["questions"] = store.get_paper_questions(paper["id"])
-    paper["files"] = [
-        {"id": f["id"], "kind": f["kind"], "filename": f["filename"],
-         "page_start": f["page_start"], "page_count": f["page_count"]}
-        for f in store.list_paper_files(paper["id"])
-    ]
-    return paper
-
-
-@router.patch("/{paper_id}")
-def update_paper(req: PaperUpdateRequest, paper: dict = Depends(auth.get_owned_paper)):
-    store.update_paper(paper["id"], title=req.title.strip())
-    return store.get_paper(paper["id"])
-
-
-@router.delete("/{paper_id}")
-def delete_paper(paper: dict = Depends(auth.get_owned_paper)):
+@router.delete("/{paper_id}/files/{file_id}")
+def delete_file(file_id: str, paper: dict = Depends(auth.get_owned_paper)):
     if paper["status"] == "processing":
-        raise HTTPException(409, "试卷正在识别中，暂不能删除")
-    if store.list_submission_ids_for_paper(paper["id"]):
-        raise HTTPException(409, "该试卷已有批改记录，请先删除对应记录")
-    try:
-        store.delete_paper(paper["id"])
-    except sqlite3.IntegrityError:
-        # 检查与删除之间恰好产生了新提交
-        raise HTTPException(409, "该试卷已有批改记录，请先删除对应记录") from None
-    return {"ok": True}
-
-
-@router.post("/{paper_id}/reprocess", status_code=202)
-def reprocess(paper: dict = Depends(auth.get_owned_paper)):
-    """识别失败或效果不佳时手动重跑（已识别文件命中缓存，不重复花钱）。"""
-    if not store.try_mark_paper_processing(paper["id"]):
-        raise HTTPException(409, "试卷正在识别中")
-    workers.enqueue_paper(paper["id"])
+        raise HTTPException(409, "正在识别中，暂不能删除文件")
+    target = next((f for f in store.list_paper_files(paper["id"]) if f["id"] == file_id), None)
+    if not target:
+        raise HTTPException(404, "文件不存在")
+    path = store.paper_file_path(paper["id"], file_id)
+    store.delete_paper_file(file_id, paper["id"])
+    if path:
+        path.unlink(missing_ok=True)
+    remaining = store.list_paper_files(paper["id"])
+    if remaining:
+        store.try_mark_paper_processing(paper["id"])
+        workers.enqueue_paper(paper["id"])
+    else:
+        store.update_paper(paper["id"], page_count=0)
+        if store.get_paper_questions(paper["id"]):
+            store.update_paper(paper["id"], status="ready", error=None)
+        else:
+            _mark_partial(paper, "没有可用文件，请上传或手动录题")
     return {"ok": True}
 
 
 @router.post("/{paper_id}/questions", status_code=201)
 def add_question(req: PaperQuestionCreateRequest, paper: dict = Depends(auth.get_owned_paper)):
-    """手动补一道题（识别漏题，或仅答案/纯手动建卷时录入题号+答案）。"""
     if paper["status"] == "processing":
         raise HTTPException(409, "试卷正在识别中")
-    number = req.number.strip()
     if len(store.get_paper_questions(paper["id"])) >= 200:
         raise HTTPException(400, "题目数量已达上限")
+    number = req.number.strip()
+    if any(q["number"].casefold() == number.casefold() for q in store.get_paper_questions(paper["id"])):
+        raise HTTPException(409, f"题号 {number} 已存在")
+    content = req.model_dump(exclude={"number", "correct_answer", "type"})
     ca = (req.correct_answer or "").strip() or None
-    try:
-        return store.add_paper_question(paper["id"], number, ca, (req.type or "").strip() or None)
-    except sqlite3.IntegrityError:
-        raise HTTPException(409, f"题号 {number} 已存在") from None
+    result = store.add_paper_question(
+        paper["id"], number, ca, (req.type or "").strip() or None, content,
+    )
+    meta = dict(paper.get("meta") or {})
+    if not meta.get("failed_pages"):
+        store.update_paper(paper["id"], status="ready", error=None)
+    return result
+
+
+@router.patch("/{paper_id}/questions/{qid}")
+def patch_question(
+    qid: str, req: PaperQuestionPatchRequest,
+    paper: dict = Depends(auth.get_owned_paper),
+):
+    if paper["status"] == "processing":
+        raise HTTPException(409, "试卷正在识别中，请稍后再编辑")
+    with store.paper_lock(paper["id"]):
+        if not store.get_paper_question(paper["id"], qid):
+            raise HTTPException(404, "题目不存在")
+        fields = req.model_dump(exclude_unset=True)
+        for key, value in list(fields.items()):
+            if isinstance(value, str):
+                fields[key] = value.strip()
+        if "number" in fields and not fields["number"]:
+            raise HTTPException(422, "题号不能为空")
+        if "correct_answer" in fields:
+            fields["correct_answer"] = fields["correct_answer"] or None
+        if "options" in fields and not fields["options"]:
+            fields["options"] = None
+        store.update_paper_question(paper["id"], qid, **fields)
+        regraded = pipeline.regrade_paper_submissions(paper["id"])
+    return {"question": store.get_paper_question(paper["id"], qid), "regraded": regraded}
 
 
 @router.delete("/{paper_id}/questions/{qid}")
 def delete_question(qid: str, paper: dict = Depends(auth.get_owned_paper)):
     if paper["status"] == "processing":
         raise HTTPException(409, "试卷正在识别中")
-    if not store.delete_paper_question(paper["id"], qid):
-        raise HTTPException(404, "题目不存在")
+    with store.paper_lock(paper["id"]):
+        if not store.delete_paper_question(paper["id"], qid):
+            raise HTTPException(404, "题目不存在")
     return {"ok": True}
 
 
-@router.patch("/{paper_id}/questions/{qid}")
-def set_answer(qid: str, req: PaperAnswerRequest, paper: dict = Depends(auth.get_owned_paper)):
-    """老师核对/修改标准答案，并同步重判该试卷下所有已批改记录。"""
-    pq = store.get_paper_question(paper["id"], qid)
-    if not pq:
-        raise HTTPException(404, "题目不存在")
-    ca = (req.correct_answer or "").strip() or None
-    store.update_paper_question_answer(paper["id"], qid, ca)
-
-    regraded = 0
-    skipped_processing = 0
-    for sub_id in store.list_submission_ids_for_paper(paper["id"]):
-        sub = store.get_job(sub_id)
-        if not sub:
-            continue
-        if sub["status"] == "processing":
-            # 在途提交会在判分前重读最新试卷答案，无需也无法在此刻改它
-            skipped_processing += 1
-            continue
-        q = store.get_question(sub_id, qid)
-        if not q:
-            continue
-        q["correct_answer"] = ca
-        pipeline.regrade([q])
-        store.update_question(sub_id, qid, correct_answer=ca, status=q["status"])
-        store.refresh_stats(sub_id)
-        if q["status"] in ("wrong", "unknown") and not q.get("explanation"):
-            workers.enqueue_explanations(sub_id, [qid], priority=1)
-        regraded += 1
-    resp = {"question": store.get_paper_question(paper["id"], qid), "regraded": regraded}
-    if skipped_processing:
-        resp["note"] = f"{skipped_processing} 份正在批改的提交将自动使用新答案判分"
-    return resp
+@router.post("/{paper_id}/knowledge-points")
+def knowledge_points(
+    req: KnowledgePointsRequest | None = None,
+    paper: dict = Depends(auth.get_owned_paper),
+):
+    with store.paper_lock(paper["id"]):
+        if req and req.items is not None:
+            count = 0
+            for qid, value in req.items.items():
+                if store.get_paper_question(paper["id"], qid):
+                    store.update_paper_question(paper["id"], qid, knowledge_point=(value or "").strip() or None)
+                    count += 1
+        else:
+            count = pipeline.complete_knowledge_points(paper["id"], overwrite=bool(req and req.overwrite))
+    return {"ok": True, "updated": count}
 
 
 @router.get("/{paper_id}/events")
-async def paper_events(paper: dict = Depends(auth.get_owned_paper)):
+def paper_events(paper: dict = Depends(auth.get_owned_paper)):
     return StreamingResponse(
-        events.sse_stream(paper["id"], paper),
+        events.sse_stream(paper["id"], _public(dict(paper))),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -219,7 +329,7 @@ async def paper_events(paper: dict = Depends(auth.get_owned_paper)):
 def page_image(n: int, paper: dict = Depends(auth.get_owned_paper)):
     if n < 1 or n > 999:
         raise HTTPException(404, "页面不存在")
-    p = store.paper_dir(paper["id"]) / "pages" / f"page_{n:02d}.jpg"
-    if not p.exists():
+    path = store.paper_dir(paper["id"]) / "pages" / f"page_{n:02d}.jpg"
+    if not path.exists():
         raise HTTPException(404, "页面不存在")
-    return FileResponse(p, media_type="image/jpeg")
+    return FileResponse(path, media_type="image/jpeg")

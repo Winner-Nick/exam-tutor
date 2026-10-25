@@ -14,9 +14,11 @@ const SECTIONS: { key: keyof NonNullable<Question['explanation']>; label: string
 export function ExplanationCard({
   question,
   onRequestExplain,
+  pending = false,
 }: {
   question: Question
   onRequestExplain: () => void
+  pending?: boolean
 }) {
   const { explanation, explain_state } = question
 
@@ -65,8 +67,8 @@ export function ExplanationCard({
       <p className="mt-2 text-sm text-dim">
         {explain_state === 'failed' ? '讲解生成失败' : '这道题还没有讲解'}
       </p>
-      <button onClick={onRequestExplain} className="btn-primary mt-3 px-4 py-1.5 text-sm">
-        {explain_state === 'failed' ? '重新生成' : '生成讲解'}
+      <button disabled={pending} onClick={onRequestExplain} className="btn-primary mt-3 px-4 py-1.5 text-sm">
+        {pending ? '正在提交…' : explain_state === 'failed' ? '重新生成' : '生成讲解'}
       </button>
     </div>
   )

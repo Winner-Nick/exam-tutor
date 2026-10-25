@@ -5,26 +5,26 @@
 /* ============ 设计基调：暖纸 · 朱砂 ============ */
 /* 语义变量随 .dark 翻转；组件一律引用 paper/surface/line/ink/ink2/dim */
 :root {
-  --paper: #f6f3ec;
-  --surface: #fdfcf8;
-  --surface-2: #f4f0e5;
-  --line: #e3ddcd;
-  --line-strong: #d5cdb6;
+  --paper: #f7f4ed;
+  --surface: #fffefa;
+  --surface-2: #f2eee3;
+  --line: #ded7c6;
+  --line-strong: #c9bea6;
   --ink: #28251f;
-  --ink2: #57523f;
-  --dim: #948d7a;
-  --shadow-soft: 0 1px 2px rgb(40 37 31 / 0.05), 0 4px 16px -6px rgb(40 37 31 / 0.06);
-  --shadow-lift: 0 2px 4px rgb(40 37 31 / 0.06), 0 12px 32px -8px rgb(40 37 31 / 0.14);
+  --ink2: #4f4a3d;
+  --dim: #6f695a;
+  --shadow-soft: 0 1px 2px rgb(40 37 31 / 0.05), 0 6px 20px -8px rgb(40 37 31 / 0.09);
+  --shadow-lift: 0 3px 6px rgb(40 37 31 / 0.06), 0 16px 36px -12px rgb(40 37 31 / 0.16);
 }
 .dark {
   --paper: #171410;
   --surface: #211d17;
   --surface-2: #2b261d;
-  --line: #38322a;
-  --line-strong: #4a4234;
+  --line: #40382d;
+  --line-strong: #594d3c;
   --ink: #ede8db;
-  --ink2: #c4bca6;
-  --dim: #847c68;
+  --ink2: #cbc3ae;
+  --dim: #aaa18d;
   --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px -6px rgb(0 0 0 / 0.4);
   --shadow-lift: 0 2px 4px rgb(0 0 0 / 0.35), 0 12px 32px -8px rgb(0 0 0 / 0.5);
 }
@@ -216,12 +216,12 @@ html {
    华为浏览器/鸿蒙 WebView 等旧内核不支持或实现有误，导致占位文字不可见 */
 input::placeholder,
 textarea::placeholder {
-  color: #a8a190;
+  color: #756f61;
   opacity: 1;
 }
 .dark input::placeholder,
 .dark textarea::placeholder {
-  color: #6e6758;
+  color: #a39a86;
 }
 
 /* 隐藏滚动条（移动端导航横向滑动） */
@@ -300,4 +300,49 @@ textarea::placeholder {
 .seal {
   @apply inline-flex items-center justify-center rounded-lg bg-primary-600 font-serif font-bold text-white select-none;
   box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / 0.25), 0 2px 6px -1px rgb(179 64 42 / 0.45);
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-primary-500);
+  outline-offset: 3px;
+}
+
+@media (pointer: coarse) {
+  .btn, .chip, .icon-btn {
+    min-height: 44px;
+  }
+  .icon-btn {
+    min-width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  body:has(.mistakes-page) header,
+  body:has(.mistakes-page) .filter-panel,
+  body:has(.mistakes-page) .review-actions,
+  body:has(.mistakes-page) .review-history,
+  body:has(.mistakes-page) .btn,
+  body:has(.mistakes-page) nav {
+    display: none !important;
+  }
+  body:has(.mistakes-page) main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  body:has(.mistakes-page) .mistake-group {
+    break-inside: avoid;
+  }
+  body:has(.mistakes-page) .mistake-card {
+    break-inside: avoid;
+    box-shadow: none !important;
+  }
 }

@@ -37,3 +37,7 @@ export const useUi = create<UiState>((set) => ({
   mobileTab: 'questions',
   setMobileTab: (mobileTab) => set({ mobileTab }),
 }))
+
+export function resetWorkspaceUi() {
+  useUi.setState({ selectedQid: null, filter: 'all', mobileTab: 'questions' })
+}

@@ -10,6 +10,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .. import auth, security, store
+from ..db import transaction
 from ..models import StudentAccountPasswordRequest, StudentAccountRequest, StudentRequest
 
 router = APIRouter(prefix="/api/students", tags=["students"])
@@ -29,14 +30,20 @@ def list_students(user: dict = Depends(auth.get_current_user)):
 
 @router.post("")
 def create_student(req: StudentRequest, user: dict = Depends(auth.require_teacher)):
-    if len(store.list_students(user["id"])) >= MAX_STUDENTS:
-        raise HTTPException(400, f"学生数量已达上限 {MAX_STUDENTS}")
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "学生姓名不能为空")
-    if any(s["name"] == name for s in store.list_students(user["id"])):
-        raise HTTPException(409, "已存在同名学生")
-    return store.create_student(user["id"], name)
+    grade = req.grade.strip() or None if req.grade else None
+    try:
+        with transaction():
+            students = store.list_students(user["id"])
+            if len(students) >= MAX_STUDENTS:
+                raise HTTPException(400, f"学生数量已达上限 {MAX_STUDENTS}")
+            if any(s["name"].casefold() == name.casefold() for s in students):
+                raise HTTPException(409, "已存在同名学生")
+            return store.create_student(user["id"], name, grade)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "已存在同名学生") from None
 
 
 @router.patch("/{student_id}")
@@ -45,7 +52,11 @@ def rename_student(req: StudentRequest, student: dict = Depends(auth.get_owned_s
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "学生姓名不能为空")
-    store.rename_student(student["id"], name)
+    grade = req.grade.strip() or None if req.grade else None
+    try:
+        store.rename_student(student["id"], name, grade, "grade" in req.model_fields_set)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "已存在同名学生") from None
     return store.get_student(student["id"])
 
 
@@ -54,14 +65,9 @@ def delete_student(student: dict = Depends(auth.get_owned_student),
                    user: dict = Depends(auth.require_teacher)):
     if student["is_self"]:
         raise HTTPException(400, "不能删除“我自己”")
-    if store.count_student_submissions(student["id"]):
-        raise HTTPException(409, "该学生名下已有批改记录，请先删除对应记录")
-    # 连同登录账号一起注销（如有）
-    store.delete_student_account(student["id"])
     try:
         store.delete_student(student["id"])
     except sqlite3.IntegrityError:
-        # 检查与删除之间恰好产生了新提交
         raise HTTPException(409, "该学生名下已有批改记录，请先删除对应记录") from None
     return {"ok": True}
 
@@ -81,8 +87,12 @@ def create_account(req: StudentAccountRequest, request: Request,
         raise HTTPException(409, "该学生已有账号，可重置密码或先注销")
     if store.get_user_by_username(username):
         raise HTTPException(409, "用户名已被占用")
-    uid = store.create_student_account(user["id"], student["id"], username,
-                                       auth.hash_password(req.password))
+    try:
+        uid = store.create_student_account(
+            user["id"], student["id"], username, auth.hash_password(req.password),
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "用户名已被占用或该学生已有账号") from None
     return {"id": uid, "username": username}
 
 

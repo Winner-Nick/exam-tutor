@@ -26,12 +26,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex flex-col items-center gap-2 px-4">
+      <div
+        className="pointer-events-none fixed inset-x-0 bottom-24 z-[70] flex flex-col items-center gap-2 px-4 lg:bottom-6"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         {items.map((t) => (
           <div
             key={t.id}
-            className={`pop-in flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white shadow-lg ${
-              t.kind === 'error' ? 'bg-rose-600' : 'bg-stone-800 dark:bg-stone-700'
+            role={t.kind === 'error' ? 'alert' : 'status'}
+            className={`pop-in flex max-w-lg items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white shadow-lg ${
+              t.kind === 'error' ? 'bg-rose-700' : 'bg-stone-800 dark:bg-stone-600'
             }`}
           >
             <Icon name={t.kind === 'error' ? 'alert' : 'check'} size={15} />

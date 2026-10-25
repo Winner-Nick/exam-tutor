@@ -219,7 +219,61 @@ def _v8(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8]
+def _v9(conn: sqlite3.Connection) -> None:
+    """会话版本、通用试卷上下文、内容版本、人工编辑保护与错题复习。"""
+    _add_column_if_missing(conn, "users", "session_version", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "papers", "subject", "TEXT")
+    _add_column_if_missing(conn, "papers", "grade", "TEXT")
+    _add_column_if_missing(conn, "students", "grade", "TEXT")
+
+    _add_column_if_missing(conn, "questions", "revision", "INTEGER NOT NULL DEFAULT 1")
+    _add_column_if_missing(conn, "questions", "explanation_revision", "INTEGER")
+    _add_column_if_missing(conn, "questions", "needs_review", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "questions", "review_status", "TEXT NOT NULL DEFAULT 'open'")
+    _add_column_if_missing(conn, "questions", "review_count", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "questions", "review_streak", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "questions", "last_reviewed_at", "REAL")
+    _add_column_if_missing(conn, "questions", "next_review_at", "REAL")
+    _add_column_if_missing(conn, "questions", "mastered_at", "REAL")
+    conn.execute(
+        "UPDATE questions SET explanation_revision = revision "
+        "WHERE explanation_json IS NOT NULL AND explanation_revision IS NULL"
+    )
+
+    _add_column_if_missing(conn, "paper_questions", "manual_created", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "paper_questions", "content_edited", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "paper_questions", "needs_review", "INTEGER NOT NULL DEFAULT 0")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS paper_question_tombstones (
+            paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+            qid TEXT NOT NULL,
+            number TEXT,
+            deleted_at REAL NOT NULL,
+            PRIMARY KEY (paper_id, qid)
+        );
+
+        CREATE TABLE IF NOT EXISTS review_attempts (
+            id INTEGER PRIMARY KEY,
+            question_pk INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+            job_id TEXT NOT NULL,
+            qid TEXT NOT NULL,
+            action TEXT NOT NULL,
+            answer TEXT,
+            result TEXT,
+            interval_days INTEGER,
+            next_review_at REAL,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_attempts_question
+            ON review_attempts(question_pk, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_questions_review
+            ON questions(review_status, next_review_at);
+        """
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9]
 
 
 def init_db() -> None:
@@ -244,7 +298,7 @@ def init_db() -> None:
 
 
 def get_conn() -> sqlite3.Connection:
-    """当前线程的连接（懒创建）。写操作请用 `with get_conn():` 包事务。"""
+    """当前线程的连接（懒创建）。写操作使用 transaction()。"""
     conn = getattr(_local, "conn", None)
     if conn is None:
         init_db()
@@ -255,3 +309,40 @@ def get_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys=ON")
         _local.conn = conn
     return conn
+
+
+def transaction():
+    """可嵌套写事务；最外层立即取得写锁，内层使用 SAVEPOINT。"""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def scoped():
+        conn = get_conn()
+        depth = getattr(_local, "tx_depth", 0)
+        outer = depth == 0 and not conn.in_transaction
+        savepoint = f"et_{depth}_{getattr(_local, 'tx_seq', 0)}"
+        _local.tx_seq = getattr(_local, "tx_seq", 0) + 1
+        _local.tx_depth = depth + 1
+        try:
+            if outer:
+                conn.execute("BEGIN IMMEDIATE")
+            else:
+                conn.execute(f"SAVEPOINT {savepoint}")
+            try:
+                yield conn
+            except Exception:
+                if outer:
+                    conn.rollback()
+                else:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            else:
+                if outer:
+                    conn.commit()
+                else:
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        finally:
+            _local.tx_depth = depth
+
+    return scoped()

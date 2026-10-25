@@ -2,10 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { Dialog } from '../components/Dialog'
 import { Icon, type IconName } from '../components/Icon'
+import { PageHeader } from '../components/PageHeader'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
-import type { Feedback, Invite, User } from '../types'
+import type { AdminUser, Feedback, Invite, User } from '../types'
+import { copyText } from '../utils/clipboard'
 
 function Card({
   title,
@@ -52,9 +55,9 @@ function InviteManager() {
 
   const create = useMutation({
     mutationFn: () => api.createInvite(maxUses, ttlDays),
-    onSuccess: ({ code }) => {
-      navigator.clipboard?.writeText(code).catch(() => {})
-      toast(`邀请码 ${code} 已生成并复制`)
+    onSuccess: async ({ code }) => {
+      const copied = await copyText(code)
+      toast(copied ? `邀请码 ${code} 已生成并复制` : `邀请码 ${code} 已生成，请从下方手动复制`, copied ? 'info' : 'error')
       qc.invalidateQueries({ queryKey: ['invites'] })
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : '生成失败', 'error'),
@@ -69,11 +72,9 @@ function InviteManager() {
     onError: (e) => toast(e instanceof ApiError ? e.message : '撤销失败', 'error'),
   })
 
-  function copy(code: string) {
-    navigator.clipboard?.writeText(code).then(
-      () => toast('已复制'),
-      () => toast('复制失败，请手动复制', 'error'),
-    )
+  async function copy(code: string) {
+    const copied = await copyText(code)
+    toast(copied ? '已复制' : '复制失败，请选中邀请码手动复制', copied ? 'info' : 'error')
   }
 
   return (
@@ -238,6 +239,46 @@ function FeedbackManager() {
   )
 }
 
+function AdminUserManager() {
+  const toast = useToast()
+  const users = useQuery({ queryKey: ['admin-users'], queryFn: api.listAdminUsers })
+  const [target, setTarget] = useState<AdminUser | null>(null)
+  const [password, setPassword] = useState('')
+  const reset = useMutation({
+    mutationFn: ({ id, value }: { id: number; value: string }) => api.resetAdminUserPassword(id, value),
+    onSuccess: () => {
+      toast('密码已重置，旧登录会话已失效')
+      setTarget(null)
+      setPassword('')
+    },
+    onError: (error) => toast(error instanceof ApiError ? error.message : '重置失败', 'error'),
+  })
+  return (
+    <Card title="账号与密码恢复" icon="users">
+      <p className="mb-3 text-sm text-ink2">管理员可重置老师、学生或其他管理员密码；重置后旧设备需要重新登录。</p>
+      {users.isPending ? <Spinner /> : users.isError ? <p className="text-sm text-rose-700">账号列表加载失败，请稍后重试。</p> : (
+        <ul className="divide-y divide-line/60">
+          {(users.data?.users ?? []).map((item) => (
+            <li key={item.id} className="flex min-h-12 flex-wrap items-center gap-2 py-2 text-sm">
+              <span className="min-w-0 flex-1 truncate font-medium">{item.username}<span className="ml-2 text-xs font-normal text-dim">{item.role}{item.student_name ? ` · ${item.student_name}` : ''}</span></span>
+              <button onClick={() => setTarget(item)} className="btn-outline px-3 py-1.5 text-xs">重置密码</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {target && (
+        <Dialog title={`重置 ${target.username} 的密码`} onClose={() => !reset.isPending && setTarget(null)}>
+          <form onSubmit={(event) => { event.preventDefault(); if (password.length >= 8) reset.mutate({ id: target.id, value: password }) }} className="space-y-3">
+            <p className="text-sm text-ink2">新密码只用于本次交付，对方登录后应立即修改。旧会话会全部失效。</p>
+            <input aria-label="新密码" type="password" minLength={8} maxLength={128} required autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} className="input" placeholder="新密码（至少 8 位）" />
+            <button disabled={password.length < 8 || reset.isPending} className="btn-primary w-full px-4 py-2">{reset.isPending ? '正在重置…' : '确认重置'}</button>
+          </form>
+        </Dialog>
+      )}
+    </Card>
+  )
+}
+
 export function SettingsPage() {
   const user = useOutletContext<User>()
   const toast = useToast()
@@ -245,75 +286,48 @@ export function SettingsPage() {
   const qc = useQueryClient()
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
-
-  async function logout() {
-    await api.logout()
-    qc.clear()
-    navigate('/login')
-  }
-
+  const [confirmPw, setConfirmPw] = useState('')
+  const logout = useMutation({
+    mutationFn: api.logout,
+    onSuccess: () => { qc.clear(); navigate('/login') },
+    onError: (error) => toast(error instanceof ApiError ? error.message : '退出失败，请检查网络后重试', 'error'),
+  })
   const changePw = useMutation({
     mutationFn: () => api.changePassword(oldPw, newPw),
     onSuccess: () => {
-      toast('密码已修改')
+      toast('密码已修改，其他设备已退出登录')
       setOldPw('')
       setNewPw('')
+      setConfirmPw('')
     },
-    onError: (e) => toast(e instanceof ApiError ? e.message : '修改失败', 'error'),
+    onError: (error) => toast(error instanceof ApiError ? error.message : '修改失败', 'error'),
   })
 
-  function submitPw(e: FormEvent) {
-    e.preventDefault()
-    if (newPw.length < 8) {
-      toast('新密码至少 8 位', 'error')
-      return
-    }
+  function submitPw(event: FormEvent) {
+    event.preventDefault()
+    if (newPw.length < 8) return toast('新密码至少 8 位', 'error')
+    if (newPw !== confirmPw) return toast('两次输入的新密码不一致', 'error')
     changePw.mutate()
   }
 
   return (
-    <div className="mx-auto max-w-lg space-y-4">
+    <div className="mx-auto max-w-2xl space-y-5">
+      <PageHeader title="设置" description="管理账号、邀请、密码恢复与用户反馈。" helpAnchor="account" />
       <Card title="账号" icon="user">
         <div className="flex items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-sm text-ink2">
-            {user.username}
-            <span className="ml-2 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-dim">
-              {user.role === 'admin' ? '管理员' : user.role === 'student' ? '学生' : '老师'}
-            </span>
-          </p>
-          <button onClick={logout} className="btn-danger shrink-0 px-3 py-1.5 text-sm">
-            <Icon name="logout" size={14} /> 退出登录
-          </button>
+          <p className="min-w-0 truncate text-sm text-ink2">{user.username}<span className="ml-2 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-dim">{user.role === 'admin' ? '管理员' : user.role === 'student' ? '学生' : '老师'}</span></p>
+          <button disabled={logout.isPending} onClick={() => logout.mutate()} className="btn-danger shrink-0 px-3 py-1.5 text-sm"><Icon name="logout" size={14} />{logout.isPending ? '正在退出…' : '退出登录'}</button>
         </div>
       </Card>
-
       <Card title="修改密码" icon="settings">
         <form onSubmit={submitPw} className="space-y-3">
-          <input
-            className="input"
-            type="password"
-            placeholder="原密码"
-            value={oldPw}
-            onChange={(e) => setOldPw(e.target.value)}
-            autoComplete="current-password"
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="新密码（至少 8 位）"
-            value={newPw}
-            onChange={(e) => setNewPw(e.target.value)}
-            autoComplete="new-password"
-          />
-          <button
-            disabled={!oldPw || !newPw || changePw.isPending}
-            className="btn-primary px-4 py-2 text-sm"
-          >
-            保存
-          </button>
+          <input aria-label="原密码" className="input" type="password" placeholder="原密码" required maxLength={128} value={oldPw} onChange={(event) => setOldPw(event.target.value)} autoComplete="current-password" />
+          <input aria-label="新密码" className="input" type="password" placeholder="新密码（至少 8 位）" required minLength={8} maxLength={128} value={newPw} onChange={(event) => setNewPw(event.target.value)} autoComplete="new-password" />
+          <input aria-label="再次输入新密码" className="input" type="password" placeholder="再次输入新密码" required minLength={8} maxLength={128} value={confirmPw} onChange={(event) => setConfirmPw(event.target.value)} autoComplete="new-password" />
+          <button disabled={!oldPw || !newPw || !confirmPw || changePw.isPending} className="btn-primary px-4 py-2 text-sm">{changePw.isPending ? '正在保存…' : '保存新密码'}</button>
         </form>
       </Card>
-
+      {user.role === 'admin' && <AdminUserManager />}
       {user.role === 'admin' && <InviteManager />}
       {user.role === 'admin' && <FeedbackManager />}
     </div>

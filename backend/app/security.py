@@ -42,6 +42,11 @@ def hit(key: str, limit: int, window_seconds: float, message: str = "请求过�
                 _buckets.pop(k, None)
 
 
+def clear(key: str) -> None:
+    with _buckets_lock:
+        _buckets.pop(key, None)
+
+
 def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 

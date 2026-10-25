@@ -1,12 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { Job } from '../types'
+import { invalidateLearningData } from '../utils/query'
 
-/**
- * 订阅作业 SSE：progress 增量更新缓存，job_done/job_error/question_explained
- * 触发整体重取。EventSource 自带重连；连接失败时返回 sseDown=true，
- * 由调用方降级为轮询（job 查询的 refetchInterval）。
- */
 export function useJobEvents(jobId: string | undefined) {
   const qc = useQueryClient()
   const [sseDown, setSseDown] = useState(false)
@@ -15,43 +11,39 @@ export function useJobEvents(jobId: string | undefined) {
   useEffect(() => {
     if (!jobId) return
     failures.current = 0
-    const es = new EventSource(`/api/jobs/${jobId}/events`)
-
+    const source = new EventSource(`/api/jobs/${jobId}/events`)
+    const refreshJob = () => void qc.invalidateQueries({ queryKey: ['job', jobId] })
     const patchJob = (patch: Partial<Job>) => {
       qc.setQueryData<Job>(['job', jobId], (old) => (old ? { ...old, ...patch } : old))
     }
+    const parse = (event: Event) => JSON.parse((event as MessageEvent).data) as Job
 
-    es.addEventListener('open', () => {
+    source.addEventListener('open', () => {
+      if (failures.current > 0) refreshJob()
       failures.current = 0
       setSseDown(false)
     })
-    es.addEventListener('snapshot', (e) => {
-      const snap = JSON.parse((e as MessageEvent).data) as Job
-      qc.setQueryData<Job>(['job', jobId], (old) =>
-        old ? { ...snap, questions: old.questions } : old,
-      )
+    source.addEventListener('snapshot', (event) => {
+      const snapshot = parse(event)
+      qc.setQueryData<Job>(['job', jobId], (old) => (old ? { ...snapshot, questions: old.questions } : old))
+      refreshJob()
     })
-    es.addEventListener('progress', (e) => {
-      const d = JSON.parse((e as MessageEvent).data)
-      patchJob({ stage: d.stage, progress: { done: d.done, total: d.total, label: d.label } })
+    source.addEventListener('progress', (event) => {
+      const data = JSON.parse((event as MessageEvent).data)
+      patchJob({
+        status: 'processing',
+        stage: data.stage,
+        progress: { done: data.done, total: data.total, label: data.label },
+      })
     })
-    es.addEventListener('job_done', () => {
-      qc.invalidateQueries({ queryKey: ['job', jobId] })
-      qc.invalidateQueries({ queryKey: ['jobs'] })
-    })
-    es.addEventListener('job_error', () => {
-      qc.invalidateQueries({ queryKey: ['job', jobId] })
-      qc.invalidateQueries({ queryKey: ['jobs'] })
-    })
-    es.addEventListener('question_explained', () => {
-      qc.invalidateQueries({ queryKey: ['job', jobId] })
-    })
-    es.addEventListener('error', () => {
+    source.addEventListener('job_done', () => void invalidateLearningData(qc))
+    source.addEventListener('job_error', () => void invalidateLearningData(qc))
+    source.addEventListener('question_explained', refreshJob)
+    source.addEventListener('error', () => {
       failures.current += 1
-      if (failures.current >= 2) setSseDown(true) // 连续失败才降级轮询
+      if (failures.current >= 2) setSseDown(true)
     })
-
-    return () => es.close()
+    return () => source.close()
   }, [jobId, qc])
 
   return { sseDown }

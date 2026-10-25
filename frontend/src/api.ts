@@ -1,80 +1,164 @@
 import type {
+  AdminUser,
   ChatMessage,
   Feedback,
   Invite,
   Job,
   JobStats,
+  MistakeQuestion,
+  Overview,
   Paper,
   PaperQuestion,
   Question,
+  RegistrationOptions,
   Release,
   Student,
   User,
 } from './types'
 
+export type ApiErrorCode = 'http' | 'network' | 'timeout' | 'abort'
+
 export class ApiError extends Error {
   status: number
-  constructor(status: number, detail: string) {
+  code: ApiErrorCode
+
+  constructor(status: number, detail: string, code: ApiErrorCode = 'http') {
     super(detail)
     this.status = status
+    this.code = code
   }
+}
+
+export const UNAUTHORIZED_EVENT = 'exam-tutor:unauthorized'
+
+function notifyUnauthorized(path: string) {
+  if (path === '/api/auth/login' || path === '/api/auth/register') return
+  window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: { path } }))
+}
+
+function errorDetail(status: number, value: unknown) {
+  if (value && typeof value === 'object' && 'detail' in value) {
+    const detail = value.detail
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) return detail.map((item) => item?.msg ?? '输入无效').join('；')
+  }
+  return `请求失败 (${status})`
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    credentials: 'same-origin',
-    headers: init?.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
-    ...init,
-  })
-  if (!res.ok) {
-    let detail = `请求失败 (${res.status})`
-    try {
-      const data = await res.json()
-      if (typeof data.detail === 'string') detail = data.detail
-    } catch {
-      /* 保留默认错误信息 */
-    }
-    throw new ApiError(res.status, detail)
+  const headers = new Headers(init?.headers)
+  if (init?.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
   }
-  return res.json() as Promise<T>
+  let res: Response
+  try {
+    res = await fetch(path, { credentials: 'same-origin', ...init, headers })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError(0, '请求已取消', 'abort')
+    }
+    throw new ApiError(0, '网络连接失败，请检查网络后重试', 'network')
+  }
+  const text = await res.text()
+  let data: unknown = null
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      if (res.ok) throw new ApiError(res.status, '服务器响应格式错误')
+    }
+  }
+  if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized(path)
+    throw new ApiError(res.status, errorDetail(res.status, data))
+  }
+  return data as T
 }
 
-/** 大文件上传走 XHR：fetch 拿不到上传进度，而手机网络传十几张照片
- * 可能要几分钟，没有进度反馈用户会以为卡死。 */
-function upload<T>(path: string, fd: FormData, onProgress?: (pct: number) => void): Promise<T> {
+export interface UploadOptions {
+  onProgress?: (pct: number) => void
+  signal?: AbortSignal
+  timeoutMs?: number
+}
+
+function upload<T>(path: string, fd: FormData, options: UploadOptions = {}): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
+    const abort = () => xhr.abort()
     xhr.open('POST', path)
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
+    xhr.timeout = options.timeoutMs ?? 180_000
+    xhr.withCredentials = true
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) options.onProgress?.(Math.round((event.loaded / event.total) * 100))
     }
     xhr.onload = () => {
+      options.signal?.removeEventListener('abort', abort)
+      let data: unknown = null
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null
+      } catch {
+        reject(new ApiError(xhr.status, '服务器响应格式错误'))
+        return
+      }
       if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          resolve(JSON.parse(xhr.responseText) as T)
-        } catch {
-          reject(new ApiError(xhr.status, '响应解析失败'))
-        }
+        resolve(data as T)
       } else {
-        let detail = `请求失败 (${xhr.status})`
-        try {
-          const d = JSON.parse(xhr.responseText)
-          if (typeof d.detail === 'string') detail = d.detail
-        } catch {
-          /* 保留默认错误信息 */
-        }
-        reject(new ApiError(xhr.status, detail))
+        if (xhr.status === 401) notifyUnauthorized(path)
+        reject(new ApiError(xhr.status, errorDetail(xhr.status, data)))
       }
     }
-    xhr.onerror = () => reject(new ApiError(0, '网络错误，请检查网络后重试'))
-    xhr.ontimeout = () => reject(new ApiError(0, '上传超时，请重试'))
-    xhr.send(fd)
+    xhr.onerror = () => {
+      options.signal?.removeEventListener('abort', abort)
+      reject(new ApiError(0, '网络连接中断，请检查网络后重试', 'network'))
+    }
+    xhr.ontimeout = () => {
+      options.signal?.removeEventListener('abort', abort)
+      reject(new ApiError(0, '上传超时，已保留所选文件，请重试', 'timeout'))
+    }
+    xhr.onabort = () => {
+      options.signal?.removeEventListener('abort', abort)
+      reject(new ApiError(0, '上传已取消，所选文件仍保留', 'abort'))
+    }
+    options.signal?.addEventListener('abort', abort, { once: true })
+    if (options.signal?.aborted) xhr.abort()
+    else xhr.send(fd)
   })
+}
+
+export interface ListParams {
+  q?: string
+  limit?: number
+  offset?: number
+}
+
+export interface JobListParams extends ListParams {
+  studentId?: number | null
+  paperId?: string | null
+}
+
+export interface MistakeFilters {
+  studentId?: number | null
+  paperId?: string | null
+  review?: 'all' | 'pending' | 'mastered' | 'due'
+  q?: string
+  days?: number
+}
+
+export type PaperQuestionInput = Partial<
+  Pick<PaperQuestion, 'number' | 'type' | 'stem' | 'options' | 'passage' | 'correct_answer' | 'knowledge_point'>
+>
+
+function listQuery(params: ListParams) {
+  const search = new URLSearchParams()
+  if (params.q?.trim()) search.set('q', params.q.trim())
+  if (params.limit != null) search.set('limit', String(params.limit))
+  if (params.offset != null) search.set('offset', String(params.offset))
+  return search
 }
 
 export const api = {
-  // auth
   me: () => request<User>('/api/auth/me'),
+  registrationOptions: () => request<RegistrationOptions>('/api/auth/registration-options'),
   login: (username: string, password: string) =>
     request<User>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   register: (username: string, password: string, invite_code: string | null) =>
@@ -95,11 +179,14 @@ export const api = {
     }),
   listInvites: () => request<{ invites: Invite[] }>('/api/admin/invites'),
   revokeInvite: (code: string) =>
-    request<{ ok: boolean }>(`/api/admin/invites/${encodeURIComponent(code)}`, {
-      method: 'DELETE',
+    request<{ ok: boolean }>(`/api/admin/invites/${encodeURIComponent(code)}`, { method: 'DELETE' }),
+  listAdminUsers: () => request<{ users: AdminUser[] }>('/api/admin/users'),
+  resetAdminUserPassword: (id: number, password: string) =>
+    request<{ ok: boolean }>(`/api/admin/users/${id}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
     }),
 
-  // students
   listStudents: () => request<{ students: Student[] }>('/api/students'),
   createStudent: (name: string) =>
     request<Student>('/api/students', { method: 'POST', body: JSON.stringify({ name }) }),
@@ -120,104 +207,132 @@ export const api = {
   deleteStudentAccount: (id: number) =>
     request<{ ok: boolean }>(`/api/students/${id}/account`, { method: 'DELETE' }),
 
-  // papers（试卷库）
-  listPapers: () => request<{ papers: Paper[] }>('/api/papers'),
+  listPapers: (params: ListParams = {}) => {
+    const search = listQuery(params)
+    return request<{ papers: Paper[]; total: number }>(`/api/papers${search.size ? `?${search}` : ''}`)
+  },
   getPaper: (id: string) => request<Paper>(`/api/papers/${id}`),
-  createPaper: (files: File[], title: string | null, onProgress?: (pct: number) => void) => {
+  createPaper: (
+    files: File[], title: string | null, options?: UploadOptions,
+    details: { subject?: string; grade?: string } = {},
+  ) => {
     const fd = new FormData()
-    files.forEach((f) => fd.append('files', f))
+    files.forEach((file) => fd.append('files', file))
     if (title) fd.append('title', title)
-    return upload<{ paper_id: string }>('/api/papers', fd, onProgress)
+    if (details.subject?.trim()) fd.append('subject', details.subject.trim())
+    if (details.grade?.trim()) fd.append('grade', details.grade.trim())
+    return upload<{ paper_id: string }>('/api/papers', fd, options)
   },
   addPaperFiles: (
     id: string,
     files: File[],
     kind: 'answers' | 'questions' | 'mixed',
-    onProgress?: (pct: number) => void,
+    options?: UploadOptions,
   ) => {
     const fd = new FormData()
-    files.forEach((f) => fd.append('files', f))
+    files.forEach((file) => fd.append('files', file))
     fd.append('kind', kind)
-    return upload<{ ok: boolean }>(`/api/papers/${id}/files`, fd, onProgress)
+    return upload<{ ok: boolean }>(`/api/papers/${id}/files`, fd, options)
   },
-  renamePaper: (id: string, title: string) =>
-    request<Paper>(`/api/papers/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
-  createManualPaper: (title: string) =>
+  deletePaperFile: (id: string, fileId: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' }),
+  retryPaper: (id: string) => request<{ ok: boolean }>(`/api/papers/${id}/retry`, { method: 'POST', body: '{}' }),
+  acceptPaperPartial: (id: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}/accept-partial`, { method: 'POST', body: '{}' }),
+  renamePaper: (
+    id: string,
+    details: string | { title?: string; subject?: string | null; grade?: string | null },
+  ) =>
+    request<Paper>(`/api/papers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(typeof details === 'string' ? { title: details } : details),
+    }),
+  createManualPaper: (details: string | { title: string; subject?: string; grade?: string }) =>
     request<{ paper_id: string }>('/api/papers/manual', {
       method: 'POST',
-      body: JSON.stringify({ title }),
+      body: JSON.stringify(typeof details === 'string' ? { title: details } : details),
     }),
-  addPaperQuestion: (id: string, body: { number: string; correct_answer?: string | null; type?: string | null }) =>
-    request<PaperQuestion>(`/api/papers/${id}/questions`, {
-      method: 'POST',
+  addPaperQuestion: (id: string, body: PaperQuestionInput & { number: string }) =>
+    request<PaperQuestion>(`/api/papers/${id}/questions`, { method: 'POST', body: JSON.stringify(body) }),
+  updatePaperQuestion: (id: string, qid: string, body: PaperQuestionInput) =>
+    request<{ question: PaperQuestion; regraded?: number }>(`/api/papers/${id}/questions/${qid}`, {
+      method: 'PATCH',
       body: JSON.stringify(body),
     }),
-  deletePaperQuestion: (id: string, qid: string) =>
-    request<{ ok: boolean }>(`/api/papers/${id}/questions/${qid}`, { method: 'DELETE' }),
-  deletePaper: (id: string) =>
-    request<{ ok: boolean }>(`/api/papers/${id}`, { method: 'DELETE' }),
-  reprocessPaper: (id: string) =>
-    request<{ ok: boolean }>(`/api/papers/${id}/reprocess`, { method: 'POST', body: '{}' }),
   setPaperAnswer: (id: string, qid: string, correct_answer: string | null) =>
     request<{ question: PaperQuestion; regraded: number }>(`/api/papers/${id}/questions/${qid}`, {
       method: 'PATCH',
       body: JSON.stringify({ correct_answer }),
     }),
+  completePaperKnowledgePoints: (id: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}/knowledge-points`, { method: 'POST', body: '{}' }),
+  deletePaperQuestion: (id: string, qid: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}/questions/${qid}`, { method: 'DELETE' }),
+  deletePaper: (id: string) => request<{ ok: boolean }>(`/api/papers/${id}`, { method: 'DELETE' }),
+  reprocessPaper: (id: string) =>
+    request<{ ok: boolean }>(`/api/papers/${id}/reprocess`, { method: 'POST', body: '{}' }),
 
-  // submissions（批改记录，沿用 jobs 资源）
-  listJobs: (studentId?: number | null, paperId?: string | null) => {
-    const p = new URLSearchParams()
-    if (studentId != null) p.set('student_id', String(studentId))
-    if (paperId != null) p.set('paper_id', paperId)
-    const qs = p.toString()
-    return request<{ jobs: Job[] }>(`/api/jobs${qs ? `?${qs}` : ''}`)
+  listJobs: (params: JobListParams = {}) => {
+    const search = listQuery(params)
+    if (params.studentId != null) search.set('student_id', String(params.studentId))
+    if (params.paperId) search.set('paper_id', params.paperId)
+    return request<{ jobs: Job[]; total: number }>(`/api/jobs${search.size ? `?${search}` : ''}`)
   },
   getJob: (id: string) => request<Job>(`/api/jobs/${id}`),
   deleteJob: (id: string) => request<{ ok: boolean }>(`/api/jobs/${id}`, { method: 'DELETE' }),
+  retryJob: (id: string) => request<{ ok: boolean }>(`/api/jobs/${id}/retry`, { method: 'POST', body: '{}' }),
+  acceptJobPartial: (id: string) =>
+    request<{ ok: boolean }>(`/api/jobs/${id}/accept-partial`, { method: 'POST', body: '{}' }),
+  deleteJobFile: (id: string, fileId: string) =>
+    request<{ ok: boolean }>(`/api/jobs/${id}/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' }),
   createSubmission: (
     paperId: string,
     studentId: number,
     files: File[],
     usePaperFiles = false,
-    onProgress?: (pct: number) => void,
+    options?: UploadOptions,
   ) => {
     const fd = new FormData()
     fd.append('paper_id', paperId)
     fd.append('student_id', String(studentId))
-    files.forEach((f) => fd.append('files', f))
+    files.forEach((file) => fd.append('files', file))
     if (usePaperFiles) fd.append('use_paper_files', 'true')
-    return upload<{ job_id: string }>('/api/submissions', fd, onProgress)
+    return upload<{ job_id: string }>('/api/submissions', fd, options)
   },
-  addSubmissionFiles: (jobId: string, files: File[], onProgress?: (pct: number) => void) => {
+  addSubmissionFiles: (jobId: string, files: File[], options?: UploadOptions) => {
     const fd = new FormData()
-    files.forEach((f) => fd.append('files', f))
-    return upload<{ ok: boolean }>(`/api/jobs/${jobId}/files`, fd, onProgress)
+    files.forEach((file) => fd.append('files', file))
+    return upload<{ ok: boolean }>(`/api/jobs/${jobId}/files`, fd, options)
   },
 
-  // questions
   override: (jobId: string, qid: string, body: { student_answer?: string | null; status?: string }) =>
-    request<{ question: Question; stats: JobStats }>(
-      `/api/jobs/${jobId}/questions/${qid}/override`,
-      { method: 'POST', body: JSON.stringify(body) },
-    ),
+    request<{ question: Question; stats: JobStats }>(`/api/jobs/${jobId}/questions/${qid}/override`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   requestExplain: (jobId: string, qid: string) =>
     request<{ explain_state: string }>(`/api/jobs/${jobId}/questions/${qid}/explain`, {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: '{}',
+    }),
+  review: (
+    jobId: string,
+    qid: string,
+    body: { action: 'attempt' | 'mastered' | 'reopen'; answer?: string; result?: 'correct' | 'wrong' },
+  ) =>
+    request<{ question: MistakeQuestion }>(`/api/jobs/${jobId}/questions/${qid}/review`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
-  // chat
   ask: (jobId: string, question: string, qid: string | null) =>
     request<{ answer: string }>(`/api/jobs/${jobId}/ask`, {
       method: 'POST',
       body: JSON.stringify({ question, qid }),
     }),
   getChat: (jobId: string, qid: string | null) =>
-    request<{ messages: ChatMessage[] }>(
-      `/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`,
-    ),
+    request<{ messages: ChatMessage[] }>(`/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`),
 
-  // 反馈
   sendFeedback: (message: string, page: string, diag: Record<string, unknown>) =>
     request<{ id: number }>('/api/feedback', {
       method: 'POST',
@@ -226,20 +341,24 @@ export const api = {
   listFeedback: () => request<{ feedback: Feedback[] }>('/api/admin/feedback'),
   deleteFeedback: (id: number) =>
     request<{ ok: boolean }>(`/api/admin/feedback/${id}`, { method: 'DELETE' }),
-
-  // App 安装包发布页（公开，无需登录）
   listReleases: () => request<{ releases: Release[] }>('/api/releases'),
 
-  // 聚合（可按学生过滤）
-  mistakes: (studentId?: number | null) =>
-    request<{ groups: { knowledge_point: string; questions: (Question & { job_id: string; job_title: string; student_name: string | null })[] }[] }>(
-      `/api/mistakes${studentId != null ? `?student_id=${studentId}` : ''}`,
-    ),
-  overview: (studentId?: number | null) =>
-    request<{
-      jobs: { id: string; title: string; student_name: string | null; created_at: number; stats: Partial<JobStats> }[]
-      knowledge_points: { knowledge_point: string; wrong: number; total: number }[]
-    }>(`/api/stats/overview${studentId != null ? `?student_id=${studentId}` : ''}`),
+  mistakes: (filters: MistakeFilters = {}) => {
+    const search = new URLSearchParams()
+    if (filters.studentId != null) search.set('student_id', String(filters.studentId))
+    if (filters.paperId) search.set('paper_id', filters.paperId)
+    if (filters.review && filters.review !== 'all') search.set('review', filters.review)
+    if (filters.q?.trim()) search.set('q', filters.q.trim())
+    if (filters.days) search.set('days', String(filters.days))
+    return request<{ groups: { knowledge_point: string; questions: MistakeQuestion[] }[] }>(
+      `/api/mistakes${search.size ? `?${search}` : ''}`,
+    )
+  },
+  overview: (studentId?: number | null, days = 30) => {
+    const search = new URLSearchParams({ days: String(days) })
+    if (studentId != null) search.set('student_id', String(studentId))
+    return request<Overview>(`/api/stats/overview?${search}`)
+  },
 }
 
 export function pageImageUrl(jobId: string, n: number): string {

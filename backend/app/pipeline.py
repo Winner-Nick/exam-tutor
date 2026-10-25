@@ -34,9 +34,12 @@ def _merge_pages(pages: list[dict]) -> tuple[list[str], dict[str, dict], dict[st
                     "number": num, "section": q.get("section"), "type": q.get("type"),
                     "stem": q.get("stem") or "", "options": q.get("options"),
                     "passage": q.get("passage"), "_sa": None, "_saconf": -1,
+                    "needs_review": bool(q.get("needs_review")),
                 }
                 order.append(num)
             cur = qmap[num]
+            if q.get("needs_review"):
+                cur["needs_review"] = True
             for f in ("section", "type", "passage"):
                 if not cur.get(f) and q.get(f):
                     cur[f] = q.get(f)
@@ -93,11 +96,17 @@ def build_paper_questions(pages: list[dict]) -> list[dict]:
             "type": c.get("type"), "stem": c.get("stem"),
             "options": c.get("options") or None, "passage": c.get("passage"),
             "correct_answer": answer_key.get(num), "knowledge_point": None,
+            "needs_review": bool(c.get("needs_review")),
         })
     known = set(order)
+    ambiguous = {
+        q["_original_number"]
+        for p in pages for q in (p.get("questions") or [])
+        if q.get("needs_review") and q.get("_original_number")
+    }
     for num, ans in answer_key.items():
-        # "五: 略。" 之类的占位条目不是题目，跳过
-        if num not in known and ans.strip().rstrip("。.") != "略":
+        # 重号未解决的答案不生成存根，避免把不确定答案硬套到另一道题。
+        if num not in known and num not in ambiguous and ans.strip().rstrip("。.") != "略":
             questions.append({
                 "id": "q" + num, "number": num, "section": None, "type": None,
                 "stem": None, "options": None, "passage": None,
@@ -121,23 +130,49 @@ def _global_numbering_ok(pages: list[dict]) -> bool:
     return True
 
 
-def _renumber_pages(pages: list[dict]) -> None:
-    """节内编号 -> 全卷统一题号（原地改写 question["number"]）。
+def _ensure_unique_numbers(pages: list[dict]) -> None:
+    counts: dict[str, int] = {}
+    for p in pages:
+        for q in p.get("questions") or []:
+            number = str(q.get("number") or "").strip()
+            if number:
+                counts[number] = counts.get(number, 0) + 1
+    used: set[str] = set()
+    for p in pages:
+        occurrence = 0
+        for q in p.get("questions") or []:
+            original = str(q.get("number") or "").strip()
+            if not original:
+                continue
+            occurrence += 1
+            number = original
+            if counts[original] > 1:
+                q["_original_number"] = original
+                base = f"{original}-U{p.get('page', 0)}-{occurrence}"
+                number = base
+                serial = 2
+                while number in used:
+                    number = f"{base}-{serial}"
+                    serial += 1
+                q["needs_review"] = True
+            q["number"] = number
+            used.add(number)
 
-    很多试卷每个大题从 1 重新计数，而答案页用全卷题号；裸题号跨页合并会让
-    不同大题的同号题互相覆盖。交给 DeepSeek 对照答案推断全局题号——输入是
-    紧凑结构、输出只有几十对映射，成本可忽略。
-    """
+
+def _renumber_pages(pages: list[dict]) -> None:
+    """按每道题的 occurrence ID 归一化题号，避免同页同号互相覆盖。"""
     compact: list[dict] = []
     for p in pages:
         for q in p.get("questions") or []:
             num = str(q.get("number") or "").strip()
             if not num:
                 continue
+            uid = f"p{p.get('page', 0)}-q{len(compact) + 1}"
+            q["_renumber_uid"] = uid
             compact.append({
-                "page": p.get("page"), "number": num,
+                "uid": uid, "page": p.get("page"), "number": num,
                 "section": q.get("section"), "type": q.get("type"),
-                "stem": (q.get("stem") or "")[:80],
+                "stem": (q.get("stem") or "")[:120],
             })
     if not compact:
         return
@@ -145,41 +180,32 @@ def _renumber_pages(pages: list[dict]) -> None:
     for p in pages:
         for k, v in (p.get("answer_key") or {}).items():
             answer_key[str(k).strip()] = str(v)[:40]
-    # 推理模型的思维链也消耗 max_tokens，给足额度防止正文被截断
     data = llm.deepseek_json(
         prompts.RENUMBER_SYSTEM, prompts.renumber_user(compact, answer_key),
         max_tokens=16000,
     )
-    mapping: dict[tuple, str] = {}
-    for m in data.get("mapping") or []:
-        g = m.get("global")
-        if g is None or str(g).strip() == "":
-            continue
-        mapping[(m.get("page"), str(m.get("number")).strip())] = str(g).strip()
-    if not mapping:
-        return
+    mapping = {
+        str(m.get("uid")): str(m.get("global")).strip()
+        for m in data.get("mapping") or []
+        if m.get("uid") and m.get("global") is not None and str(m.get("global")).strip()
+    }
     for p in pages:
         for q in p.get("questions") or []:
-            num = str(q.get("number") or "").strip()
-            g = mapping.get((p.get("page"), num))
-            if g:
-                q["number"] = g
+            uid = q.pop("_renumber_uid", None)
+            if uid and mapping.get(uid):
+                q["number"] = mapping[uid]
+            else:
+                q.pop("_renumber_uid", None)
 
 
 def _grade_one(q: dict) -> None:
-    """单题判分（_grade_all 与 regrade 共用同一套规则，保证初判与改判一致）。
-
-    规则：
-    - 主观题（作文/写作类提示，或既无选项又无标准答案）→ subjective
-    - 有选项（选择题）：学生没答 → unknown；有标准答案则严格比对
-    - 无选项（填空/简答）：完全一致判对；答案是单个字母（实为选择题特征）不一致判错；
-      其余不一致不轻易判错（手写转写有误差），标 unknown 交人工
-    """
+    """主观题明确识别；其他缺答案或无法可靠比较的一律待确认。"""
     opts = q.get("options")
     ca = q.get("correct_answer")
     sa = q.get("student_answer")
     hint = f"{q.get('type') or ''}{q.get('section') or ''}"
-    if any(h in hint for h in _SUBJECTIVE_HINT) or (not opts and not ca):
+    explicit_subjective = str(q.get("type") or "").strip().lower() == "subjective"
+    if any(h in hint for h in _SUBJECTIVE_HINT) or explicit_subjective:
         q["status"] = "subjective"
     elif opts:
         if not sa:
@@ -335,20 +361,25 @@ def process_job(job_id: str) -> None:
             indent=2,
         )
 
-        # 4) 判分即完成；错题讲解交给后台队列预生成（用户点开可插队）
+        failed_pages = [p["page"] for p in pages if p.get("error")]
+        meta["failed_pages"] = failed_pages
+        meta["accepted_partial"] = False
+        status = "partial" if failed_pages else "done"
         store.replace_questions(job_id, questions)
         store.update_job(
-            job_id, status="done", stage="done", meta=meta,
+            job_id, status=status, stage="done", meta=meta,
+            error="部分页面识别失败，请重试或接受" if failed_pages else None,
             title=meta.get("title"), stats=_stats(questions),
-            progress_done=1, progress_total=1, progress_label="完成",
+            progress_done=1, progress_total=1,
+            progress_label="部分完成" if failed_pages else "完成",
         )
-        events.publish(job_id, "job_done", {"status": "done"})
+        events.publish(job_id, "job_done", {"status": status})
 
-        from . import workers  # 局部导入，避免与 workers -> pipeline 形成环
-
-        targets = [q["id"] for q in questions if q.get("status") in ("wrong", "unknown")]
-        if targets:
-            workers.enqueue_explanations(job_id, targets, priority=1)
+        if not failed_pages:
+            from . import workers
+            targets = [q["id"] for q in questions if q.get("status") in ("wrong", "unknown")]
+            if targets:
+                workers.enqueue_explanations(job_id, targets, priority=1)
 
     except Exception as exc:  # noqa: BLE001
         store.update_job(job_id, status="error", error=f"{type(exc).__name__}: {exc}")
@@ -381,6 +412,9 @@ def _render_files(owner_dir, files: list[dict], path_of) -> list[tuple[dict, int
             n = 1
         plans.append((f, page_no, n))
         page_no += n
+        from .config import settings
+        if page_no > settings.max_pages:
+            raise ValueError(f"累计 {page_no} 页，超过每次任务 {settings.max_pages} 页上限；请减少文件后重试")
     return plans
 
 
@@ -460,87 +494,192 @@ def _set_paper_progress(paper_id: str, stage: str, done: int, total: int, label:
 
 
 def process_paper(paper_id: str) -> None:
-    paper = store.get_paper(paper_id)
-    if not paper:
-        return
-    pd = store.paper_dir(paper_id)
-    try:
-        files = store.list_paper_files(paper_id)
-        if not files:
-            raise RuntimeError("试卷没有任何文件")
+    with store.paper_lock(paper_id):
+        paper = store.get_paper(paper_id)
+        if not paper:
+            return
+        pd = store.paper_dir(paper_id)
+        try:
+            files = store.list_paper_files(paper_id)
+            if not files:
+                raise RuntimeError("试卷没有任何文件")
+            _set_paper_progress(paper_id, "render", 0, 1, "正在渲染试卷页面…")
+            plans = _render_files(pd, files, lambda fid: store.paper_file_path(paper_id, fid))
+            page_count = sum(n for _, _, n in plans)
+            store.update_paper(paper_id, page_count=page_count)
+            for f, start, n in plans:
+                store.update_paper_file(f["id"], start + 1, n)
 
-        _set_paper_progress(paper_id, "render", 0, 1, "正在渲染试卷页面…")
-        plans = _render_files(pd, files, lambda fid: store.paper_file_path(paper_id, fid))
-        page_count = sum(n for _, _, n in plans)
-        store.update_paper(paper_id, page_count=page_count)
-        for f, start, n in plans:
-            store.update_paper_file(f["id"], start + 1, n)
+            _set_paper_progress(paper_id, "vision", 0, page_count, "正在识别试卷内容…")
+            done_pages = 0
+            all_pages: list[dict] = []
 
-        _set_paper_progress(paper_id, "vision", 0, page_count, "正在识别试卷内容…")
-        done_pages = 0
-        all_pages: list[dict] = []
+            def blank(li: int) -> dict:
+                return {"page": li, "page_role": ["blank"], "raw_text": "",
+                        "questions": [], "answer_key": {}}
 
-        def blank(li: int) -> dict:
-            return {"page": li, "page_role": ["blank"], "raw_text": "",
-                    "questions": [], "answer_key": {}}
+            for f, start, n in plans:
+                def prog(done: int, total: int) -> None:
+                    _set_paper_progress(paper_id, "vision", done_pages + done, page_count,
+                                        f"正在识别第 {done_pages + done}/{page_count} 页…")
+                results = _vision_file_pages(
+                    pd / "pages", start, n, f.get("sha256"), "full",
+                    lambda payload: llm.vision_extract_pages(payload, on_progress=prog), blank,
+                )
+                done_pages += n
+                for p in results:
+                    gp = dict(p)
+                    gp["page"] = start + p["page"]
+                    all_pages.append(gp)
+            all_pages.sort(key=lambda p: p["page"])
+            failed_pages = [p["page"] for p in all_pages if p.get("error")]
 
-        for f, start, n in plans:
-            def prog(done: int, total: int) -> None:
-                _set_paper_progress(paper_id, "vision", done_pages + done, page_count,
-                                    f"正在识别第 {done_pages + done}/{page_count} 页…")
+            _set_paper_progress(paper_id, "consolidate", 0, 1, "正在汇总题目与标准答案…")
+            if not _global_numbering_ok(all_pages):
+                try:
+                    _renumber_pages(all_pages)
+                except Exception:  # noqa: BLE001
+                    pass
+            _ensure_unique_numbers(all_pages)
+            store.write_json_atomic(pd / "pages_raw.json", all_pages, indent=2)
+            questions = build_paper_questions(all_pages)
+            review_numbers = {
+                q.get("number") for p in all_pages for q in (p.get("questions") or [])
+                if q.get("needs_review")
+            }
+            for q in questions:
+                if q.get("number") in review_numbers:
+                    q["needs_review"] = True
 
-            results = _vision_file_pages(
-                pd / "pages", start, n, f.get("sha256"), "full",
-                lambda payload: llm.vision_extract_pages(payload, on_progress=prog),
-                blank,
-            )
-            done_pages += n
-            for p in results:
-                gp = dict(p)
-                gp["page"] = start + p["page"]
-                all_pages.append(gp)
-
-        all_pages.sort(key=lambda p: p["page"])
-
-        _set_paper_progress(paper_id, "consolidate", 0, 1, "正在汇总题目与标准答案…")
-        if not _global_numbering_ok(all_pages):
-            _set_paper_progress(paper_id, "consolidate", 0, 1, "正在对照答案归一化题号…")
-            try:
-                _renumber_pages(all_pages)
-            except Exception:  # noqa: BLE001
-                # 归一化失败退回原始题号：宁可部分题缺答案，也不张冠李戴
-                pass
-        # 归一化之后落盘：提交"学生答在试卷上"的零成本路径靠这份数据按全卷题号取手写答案
-        store.write_json_atomic(pd / "pages_raw.json", all_pages, indent=2)
-        questions = build_paper_questions(all_pages)
-
-        # 补传答案/重新识别时，保留老师手工核对过的答案与已有考点：
-        # edited=1（手工录入/改判过）的题以人工值为准，视觉输出不得覆盖
-        old = {q["id"]: q for q in store.get_paper_questions(paper_id)}
-        for q in questions:
-            o = old.get(q["id"])
-            if o:
-                if o.get("edited") and o.get("correct_answer") is not None:
-                    q["correct_answer"] = o["correct_answer"]
+            old = {q["id"]: q for q in store.get_paper_questions(paper_id)}
+            tombstones = {item["qid"] for item in store.list_paper_question_tombstones(paper_id)}
+            questions = [q for q in questions if q["id"] not in tombstones]
+            for q in questions:
+                previous = old.get(q["id"])
+                if not previous:
+                    continue
+                if previous.get("edited"):
+                    q["correct_answer"] = previous.get("correct_answer")
                     q["edited"] = True
-                elif not q.get("correct_answer") and o.get("correct_answer"):
-                    q["correct_answer"] = o["correct_answer"]
-                if o.get("knowledge_point"):
-                    q["knowledge_point"] = o["knowledge_point"]
+                elif not q.get("correct_answer") and previous.get("correct_answer"):
+                    q["correct_answer"] = previous["correct_answer"]
+                if previous.get("content_edited"):
+                    for field in ("number", "section", "type", "stem", "options", "passage"):
+                        q[field] = previous.get(field)
+                    q["content_edited"] = True
+                if previous.get("knowledge_point"):
+                    q["knowledge_point"] = previous["knowledge_point"]
+            recognized = {q["id"] for q in questions}
+            questions.extend(
+                q for qid, q in old.items()
+                if q.get("manual_created") and qid not in recognized and qid not in tombstones
+            )
+            questions.sort(key=lambda q: _num_key(q["number"]))
 
-        meta = build_meta(all_pages, questions, files[0].get("filename") or "")
-        store.replace_paper_questions(paper_id, questions)
-        fields = {"status": "ready", "stage": "done", "meta": meta,
-                  "progress_done": 1, "progress_total": 1, "progress_label": "完成"}
-        if not paper.get("title"):
-            fields["title"] = meta.get("title")
-        store.update_paper(paper_id, **fields)
-        events.publish(paper_id, "paper_done", {"status": "ready"})
+            meta = build_meta(all_pages, questions, files[0].get("filename") or "")
+            numbering_review = any(q.get("needs_review") for q in questions)
+            meta.update({
+                "failed_pages": failed_pages,
+                "numbering_needs_review": numbering_review,
+                "accepted_partial": False,
+            })
+            store.replace_paper_questions(paper_id, questions)
+            if questions and not failed_pages:
+                try:
+                    complete_knowledge_points(paper_id)
+                except Exception:  # noqa: BLE001
+                    meta["knowledge_warning"] = "部分知识点暂未自动补全，可稍后重试"
+            regrade_paper_submissions(paper_id)
+            partial = bool(failed_pages or numbering_review or not questions)
+            if not questions:
+                error = "没有可用题目，请重试识别或手动补题"
+            elif failed_pages:
+                error = f"第 {', '.join(map(str, failed_pages))} 页识别失败，请重试或明确接受部分结果"
+            elif numbering_review:
+                error = "部分题号需要人工核对，系统没有合并或套用不确定答案"
+            else:
+                error = None
+            fields = {
+                "status": "partial" if partial else "ready", "stage": "done", "meta": meta,
+                "error": error, "progress_done": 1, "progress_total": 1,
+                "progress_label": "部分完成" if partial else "完成",
+            }
+            if not paper.get("title"):
+                fields["title"] = meta.get("title")
+            store.update_paper(paper_id, **fields)
+            events.publish(paper_id, "paper_done", {"status": fields["status"]})
+        except Exception as exc:  # noqa: BLE001
+            store.update_paper(paper_id, status="error", error=f"{type(exc).__name__}: {exc}")
+            events.publish(paper_id, "paper_error", {"error": f"{type(exc).__name__}: {exc}"})
+            raise
 
-    except Exception as exc:  # noqa: BLE001
-        store.update_paper(paper_id, status="error", error=f"{type(exc).__name__}: {exc}")
-        events.publish(paper_id, "paper_error", {"error": f"{type(exc).__name__}: {exc}"})
-        raise
+
+def regrade_paper_submissions(paper_id: str) -> int:
+    """把当前试卷内容同步到非在途提交；在途提交在最终判分锁内会重读。"""
+    paper_questions = {q["id"]: q for q in store.get_paper_questions(paper_id)}
+    changed_submissions = 0
+    with store.paper_lock(paper_id):
+        for job_id in store.list_submission_ids_for_paper(paper_id):
+            with store.job_lock(job_id):
+                job = store.get_job(job_id)
+                if not job or job["status"] == "processing":
+                    continue
+                changed = False
+                explain_targets = []
+                for q in store.get_questions(job_id):
+                    pq = paper_questions.get(q["id"])
+                    if not pq:
+                        continue
+                    fields = {
+                        key: pq.get(key) for key in
+                        ("number", "section", "type", "stem", "options", "passage",
+                         "correct_answer", "knowledge_point")
+                        if q.get(key) != pq.get(key)
+                    }
+                    if not fields:
+                        continue
+                    candidate = dict(q)
+                    candidate.update(fields)
+                    if not q.get("overridden"):
+                        regrade([candidate])
+                        fields["status"] = candidate["status"]
+                    store.update_question(job_id, q["id"], **fields)
+                    changed = True
+                    updated = store.get_question(job_id, q["id"])
+                    if updated["status"] in ("wrong", "unknown"):
+                        explain_targets.append(q["id"])
+                if changed:
+                    store.refresh_stats(job_id)
+                    changed_submissions += 1
+                    if explain_targets:
+                        from . import workers
+                        workers.enqueue_explanations(job_id, explain_targets, priority=1)
+                    events.publish(job_id, "job_done", {"status": job["status"], "regraded": True})
+    return changed_submissions
+
+
+def complete_knowledge_points(paper_id: str, overwrite: bool = False) -> int:
+    paper = store.get_paper(paper_id) or {}
+    questions = [
+        q for q in store.get_paper_questions(paper_id)
+        if (overwrite or not q.get("knowledge_point")) and (q.get("stem") or q.get("options"))
+    ]
+    updated = 0
+    for start in range(0, len(questions), 20):
+        batch = questions[start:start + 20]
+        result = llm.deepseek_json(
+            prompts.KNOWLEDGE_SYSTEM + "\n" + prompts.tutor_context(paper),
+            prompts.knowledge_user(batch), max_tokens=4000,
+        )
+        mapping = result.get("knowledge_points") or {}
+        for q in batch:
+            value = mapping.get(q["id"])
+            if value and str(value).strip():
+                store.update_paper_question(paper_id, q["id"], knowledge_point=str(value).strip()[:200])
+                updated += 1
+    if updated:
+        regrade_paper_submissions(paper_id)
+    return updated
 
 
 # ---------------------------------------------------------------------------
@@ -596,12 +735,11 @@ def process_submission(job_id: str) -> None:
 
         _set_progress(job_id, "vision", 0, page_count, "正在识别学生作答…")
         done_pages = 0
+        failed_pages: set[int] = set()
 
         def blank(li: int) -> dict:
             return {"page": li, "answers": []}
 
-        # 试卷自己的 pages_raw.json 是题号归一化后的版本；共享 sha 缓存是原始
-        # 节内编号（跨试卷复用，不能按某张卷改写），优先用前者取手写答案
         paper_files_by_sha = {
             pf.get("sha256"): pf for pf in store.list_paper_files(job["paper_id"])
             if pf.get("sha256")
@@ -618,13 +756,17 @@ def process_submission(job_id: str) -> None:
                 ps, pc = pf.get("page_start") or 1, pf.get("page_count") or 0
                 for p in paper_raw:
                     if ps <= (p.get("page") or 0) < ps + pc:
+                        if p.get("error"):
+                            failed_pages.add(p["page"])
+                            continue
                         for q in p.get("questions") or []:
                             put(q.get("number"), q.get("student_marked"),
                                 q.get("student_marked_confidence"))
             elif full_cache and full_cache.exists():
-                # 同一文件做过试卷全量识别（学生答在试卷上的场景）：直接取
-                # 其中的 student_marked，零 Gemini 成本
                 for p in json.loads(full_cache.read_text(encoding="utf-8")):
+                    if p.get("error"):
+                        failed_pages.add(start + p["page"])
+                        continue
                     for q in p.get("questions") or []:
                         put(q.get("number"), q.get("student_marked"),
                             q.get("student_marked_confidence"))
@@ -632,7 +774,6 @@ def process_submission(job_id: str) -> None:
                 def prog(done: int, total: int) -> None:
                     _set_progress(job_id, "vision", done_pages + done, page_count,
                                   f"正在识别第 {done_pages + done}/{page_count} 页…")
-
                 results = _vision_file_pages(
                     jd / "pages", start, n, sha, f"ans-{job['paper_id']}",
                     lambda payload: llm.vision_extract_pages(
@@ -640,62 +781,66 @@ def process_submission(job_id: str) -> None:
                         system=prompts.SUBMISSION_VISION_SYSTEM,
                         user_builder=lambda i: prompts.submission_vision_user(i, ctx),
                         max_tokens=2500,
-                    ),
-                    blank,
+                    ), blank,
                 )
                 for p in results:
+                    if p.get("error"):
+                        failed_pages.add(start + p["page"])
+                        continue
                     for a in p.get("answers") or []:
                         put(a.get("number"), a.get("answer"), a.get("confidence"))
             done_pages += n
 
         _set_progress(job_id, "consolidate", 0, 1, "正在对照标准答案判分…")
-        # 判分前重读试卷题目：老师可能在处理期间刚改过标准答案，以最新值为准
-        paper_qs = store.get_paper_questions(job["paper_id"])
-        questions = grade_submission_questions(paper_qs, {k: v[0] for k, v in answers.items()})
+        with store.paper_lock(job["paper_id"]), store.job_lock(job_id):
+            paper = store.get_paper(job["paper_id"])
+            if not paper or paper["status"] != "ready":
+                raise RuntimeError("试卷尚未确认完整，请先处理失败页或明确接受部分结果")
+            paper_qs = store.get_paper_questions(job["paper_id"])
+            if not paper_qs:
+                raise RuntimeError("试卷没有题目，无法判分")
+            questions = grade_submission_questions(paper_qs, {k: v[0] for k, v in answers.items()})
+            low_nums = {k for k, v in answers.items() if v[1] <= _CONF["low"]}
+            for q in questions:
+                if str(q["number"]) in low_nums and q["status"] in ("correct", "wrong"):
+                    q["status"] = "unknown"
 
-        # 低置信度识别（涂改、字迹模糊）不可信：即便恰好与标准答案一致也不判对，
-        # 标为"待确认"交老师在结果页核对修正
-        low_nums = {k for k, v in answers.items() if v[1] <= _CONF["low"]}
-        for q in questions:
-            if str(q["number"]) in low_nums and q["status"] in ("correct", "wrong"):
-                q["status"] = "unknown"
+            old_qs = {q["id"]: q for q in store.get_questions(job_id)}
+            for q in questions:
+                previous = old_qs.get(q["id"])
+                if not previous:
+                    continue
+                if previous.get("overridden"):
+                    q["student_answer"] = previous.get("student_answer")
+                    q["status"] = previous["status"]
+                    q["overridden"] = True
+                elif not q.get("student_answer") and previous.get("student_answer"):
+                    q["student_answer"] = previous["student_answer"]
+                    q["status"] = previous["status"]
+                if previous.get("knowledge_point") and not q.get("knowledge_point"):
+                    q["knowledge_point"] = previous["knowledge_point"]
 
-        # 补拍重跑：与上次结果合并——老师人工修正过的题（overridden）原样保留；
-        # 新照片没拍到的题保留旧答案与判定；答案与判定未变的题保留已生成的讲解
-        old_qs = {q["id"]: q for q in store.get_questions(job_id)}
-        for q in questions:
-            o = old_qs.get(q["id"])
-            if not o:
-                continue
-            if o.get("overridden"):
-                q["student_answer"] = o.get("student_answer")
-                q["status"] = o["status"]
-                q["overridden"] = True
-            elif not q.get("student_answer") and o.get("student_answer"):
-                q["student_answer"] = o["student_answer"]
-                q["status"] = o["status"]
-            if (q.get("student_answer") == o.get("student_answer")
-                    and q.get("status") == o.get("status")):
-                q["explanation"] = o.get("explanation")
-                q["explain_state"] = o.get("explain_state") or "none"
-                if o.get("knowledge_point"):
-                    q["knowledge_point"] = o["knowledge_point"]
-        meta = {"title": job.get("paper_title") or "试卷",
-                "total_questions": len(questions)}
-
-        store.replace_questions(job_id, questions)
-        store.update_job(
-            job_id, status="done", stage="done", meta=meta,
-            title=job.get("paper_title"), stats=_stats(questions),
-            progress_done=1, progress_total=1, progress_label="完成",
-        )
-        events.publish(job_id, "job_done", {"status": "done"})
-
-        from . import workers  # 局部导入，避免与 workers -> pipeline 形成环
-
-        targets = [q["id"] for q in questions if q.get("status") in ("wrong", "unknown")]
-        if targets:
-            workers.enqueue_explanations(job_id, targets, priority=1)
+            failed = sorted(failed_pages)
+            meta = {
+                "title": job.get("paper_title") or "试卷",
+                "total_questions": len(questions), "failed_pages": failed,
+                "accepted_partial": False,
+            }
+            status = "partial" if failed else "done"
+            error = f"第 {', '.join(map(str, failed))} 页识别失败；当前结果未完整，请重试或接受" if failed else None
+            store.replace_questions(job_id, questions)
+            store.update_job(
+                job_id, status=status, stage="done", meta=meta, error=error,
+                title=job.get("paper_title"), stats=_stats(questions),
+                progress_done=1, progress_total=1,
+                progress_label="部分完成" if failed else "完成",
+            )
+            events.publish(job_id, "job_done", {"status": status})
+            if not failed:
+                from . import workers
+                targets = [q["id"] for q in questions if q.get("status") in ("wrong", "unknown")]
+                if targets:
+                    workers.enqueue_explanations(job_id, targets, priority=1)
 
     except Exception as exc:  # noqa: BLE001
         store.update_job(job_id, status="error", error=f"{type(exc).__name__}: {exc}")

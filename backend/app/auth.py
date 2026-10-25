@@ -19,14 +19,31 @@ COOKIE_NAME = "et_session"
 TOKEN_TTL = 7 * 86400  # 7 天；剩余不足一半时自动续签
 
 
+_PASSWORD_PREFIX = "bcrypt-sha256$"
+
+
+def _prehash_password(password: str) -> bytes:
+    import base64
+    import hashlib
+
+    digest = hashlib.sha256(password.encode("utf-8")).digest()
+    return base64.b64encode(digest)
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+    hashed = bcrypt.hashpw(_prehash_password(password), bcrypt.gensalt()).decode("ascii")
+    return _PASSWORD_PREFIX + hashed
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
+        if password_hash.startswith(_PASSWORD_PREFIX):
+            return bcrypt.checkpw(
+                _prehash_password(password),
+                password_hash[len(_PASSWORD_PREFIX):].encode("ascii"),
+            )
         return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("ascii"))
-    except ValueError:
+    except (ValueError, TypeError):
         return False
 
 
@@ -36,6 +53,7 @@ def create_token(user: dict) -> str:
         "sub": str(user["id"]),
         "username": user["username"],
         "role": user["role"],
+        "sv": int(user.get("session_version") or 0),
         "iat": now,
         "exp": now + TOKEN_TTL,
     }
@@ -73,6 +91,8 @@ def get_current_user(
     user = store.get_user(int(payload["sub"]))
     if not user:
         raise HTTPException(401, "账号不存在")
+    if int(payload.get("sv", 0)) != int(user.get("session_version") or 0):
+        raise HTTPException(401, "密码已修改，请重新登录")
     if payload["exp"] - time.time() < TOKEN_TTL / 2:
         set_session_cookie(response, create_token(user))
     return user
