@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -31,8 +32,13 @@ from backend.app.db import get_conn, init_db  # noqa: E402
 def backup_db() -> None:
     src = DATA_DIR / "app.db"
     if src.exists():
+        init_db()
         dst = DATA_DIR / f"app.db.bak-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(src, dst)
+        target = sqlite3.connect(dst)
+        try:
+            get_conn().backup(target)
+        finally:
+            target.close()
         print(f"已备份数据库 -> {dst}")
 
 
