@@ -11,13 +11,12 @@ import { Icon } from '../components/Icon'
 import { PageHeader } from '../components/PageHeader'
 import { PaperViewer } from '../components/PaperViewer'
 import { QuestionDetail } from '../components/QuestionDetail'
-import { QuestionGrid } from '../components/QuestionGrid'
+import { QuestionGrid, type QuestionFilter } from '../components/QuestionGrid'
 import { Spinner } from '../components/Spinner'
 import { StageStepper } from '../components/StageStepper'
 import { useToast } from '../components/Toast'
 import { useJobEvents } from '../hooks/useJobEvents'
 import { useUploadGuard } from '../hooks/useUploadGuard'
-import { useUi } from '../store'
 import type { Job, ResourceFile, User } from '../types'
 import { compressPicked } from '../utils/compressImage'
 import { invalidateLearningData } from '../utils/query'
@@ -51,7 +50,9 @@ export function JobPage() {
   const toast = useToast()
   const user = useOutletContext<User>()
   const isStudent = user.role === 'student'
-  const { selectedQid, setSelectedQid, mobileTab, setMobileTab, setFilter } = useUi()
+  const [selectedQid, setSelectedQid] = useState<string | null>(null)
+  const [filter, setFilter] = useState<QuestionFilter>('all')
+  const [mobileTab, setMobileTab] = useState<'questions' | 'detail' | 'chat'>('questions')
   const [chatQid, setChatQid] = useState<string | null>(null)
   const [showPaper, setShowPaper] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -223,7 +224,7 @@ export function JobPage() {
         <EmptyState icon="file-text" title="还没有可显示的题目" description="请使用原文件重试，或删除坏文件并补拍清晰页面。" />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
-          <section className={`card p-4 ${mobileTab !== 'questions' ? 'hidden lg:block' : ''}`} aria-label="题目列表"><QuestionGrid questions={questions} /></section>
+          <section className={`card p-4 ${mobileTab !== 'questions' ? 'hidden lg:block' : ''}`} aria-label="题目列表"><QuestionGrid questions={questions} filter={filter} selectedQid={selectedQid} onFilterChange={setFilter} onSelectQuestion={(qid) => { setSelectedQid(qid); setMobileTab('detail') }} /></section>
           <section className={`card p-5 ${mobileTab !== 'detail' ? 'hidden lg:block' : ''}`} aria-label="题目详情">
             {selected ? <QuestionDetail job={job} question={selected} canEdit={!isStudent} onAsk={() => { setChatQid(selected.id); setMobileTab('chat') }} /> : <EmptyState icon="grid" title="选择一道题" description="从题目列表选择题号，查看作答、标准答案与讲解。" />}
           </section>

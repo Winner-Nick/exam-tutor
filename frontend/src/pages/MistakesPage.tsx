@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { EmptyState } from '../components/EmptyState'
@@ -7,11 +7,15 @@ import { ErrorState } from '../components/ErrorState'
 import { Icon } from '../components/Icon'
 import { Markdown } from '../components/Markdown'
 import { PageHeader } from '../components/PageHeader'
+import { Pagination } from '../components/Pagination'
 import { StudentFilter } from '../components/StudentFilter'
 import { useToast } from '../components/Toast'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import type { MistakeQuestion } from '../types'
+import { emptyPageTarget } from '../utils/pagination'
 import { invalidateReviewData } from '../utils/query'
+
+const PAGE_SIZE = 20
 
 type ReviewFilter = 'all' | 'pending' | 'mastered' | 'due'
 type ReviewBody = { action: 'attempt' | 'mastered' | 'reopen'; answer?: string; result?: 'correct' | 'wrong' }
@@ -102,6 +106,7 @@ function csvCell(value: unknown) {
 export function MistakesPage() {
   const [params, setParams] = useSearchParams()
   const toast = useToast()
+  const [exporting, setExporting] = useState(false)
   const studentId = Number(params.get('student_id')) || null
   const paperId = params.get('paper_id') ?? ''
   const reviewParam = params.get('review')
@@ -109,45 +114,67 @@ export function MistakesPage() {
   const days = Number(params.get('days')) || undefined
   const keyword = params.get('q') ?? ''
   const debouncedKeyword = useDebouncedValue(keyword)
+  const page = Math.max(0, Number(params.get('page')) || 0)
 
   const query = useQuery({
-    queryKey: ['mistakes', { studentId, paperId, review, q: debouncedKeyword, days }],
-    queryFn: ({ signal }) => api.mistakes({ studentId, paperId: paperId || null, review, q: debouncedKeyword, days }, { signal }),
+    queryKey: ['mistakes', { studentId, paperId, review, q: debouncedKeyword, days, page }],
+    queryFn: ({ signal }) => api.mistakes({ studentId, paperId: paperId || null, review, q: debouncedKeyword, days, limit: PAGE_SIZE, offset: page * PAGE_SIZE }, { signal }),
   })
   const papers = useQuery({ queryKey: ['papers', 'options'], queryFn: ({ signal }) => api.listPapers({ limit: 100 }, { signal }) })
   const groups = query.data?.groups ?? []
   const rows = groups.flatMap((group) => group.questions)
+  const total = query.data?.total ?? 0
   const filtered = !!(studentId || paperId || review !== 'all' || days || keyword)
+
+  useEffect(() => {
+    const target = emptyPageTarget(page, total, PAGE_SIZE, rows.length)
+    if (target === null) return
+    setParams((old) => {
+      const next = new URLSearchParams(old)
+      next.set('page', String(target))
+      return next
+    })
+  }, [page, total, rows.length, setParams])
 
   function update(key: string, value: string, replace = false) {
     setParams((old) => {
       const next = new URLSearchParams(old)
       if (value) next.set(key, value)
       else next.delete(key)
+      next.delete('page')
       return next
     }, { replace })
   }
 
-  function exportCsv() {
-    if (!rows.length) return
-    const header = ['知识点', '学生', '试卷', '题号', '题干', '上次作答', '标准答案', '复习状态', '复习次数', '连续答对', '下次到期', '原题链接']
-    const data = rows.map((question) => [
-      question.knowledge_point ?? '未归类', question.student_name ?? '', question.job_title, question.number,
-      question.stem ?? '', question.student_answer ?? '', question.correct_answer ?? '',
-      question.review?.mastered ? '已掌握' : '待复习', question.review?.review_count ?? 0,
-      question.review?.streak ?? 0, formatTime(question.review?.next_review_at),
-      `${location.origin}/jobs/${question.job_id}?qid=${encodeURIComponent(question.id)}`,
-    ])
-    const csv = '\ufeff' + [header, ...data].map((row) => row.map(csvCell).join(',')).join('\r\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `错题复习-${new Date().toISOString().slice(0, 10)}.csv`
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-    toast(`已导出当前筛选的 ${rows.length} 道错题`)
+  async function exportCsv() {
+    if (exporting || total === 0) return
+    setExporting(true)
+    try {
+      const result = await api.mistakes({ studentId, paperId: paperId || null, review, q: debouncedKeyword, days, limit: 0, offset: 0 })
+      const exportRows = result.groups.flatMap((group) => group.questions)
+      const header = ['知识点', '学生', '试卷', '题号', '题干', '上次作答', '标准答案', '复习状态', '复习次数', '连续答对', '下次到期', '原题链接']
+      const data = exportRows.map((question) => [
+        question.knowledge_point ?? '未归类', question.student_name ?? '', question.job_title, question.number,
+        question.stem ?? '', question.student_answer ?? '', question.correct_answer ?? '',
+        question.review?.mastered ? '已掌握' : '待复习', question.review?.review_count ?? 0,
+        question.review?.streak ?? 0, formatTime(question.review?.next_review_at),
+        `${location.origin}/jobs/${question.job_id}?qid=${encodeURIComponent(question.id)}`,
+      ])
+      const csv = '\ufeff' + [header, ...data].map((row) => row.map(csvCell).join(',')).join('\r\n')
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `错题复习-${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast(`已导出当前筛选的 ${exportRows.length} 道错题`)
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : '导出失败，请重试', 'error')
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -156,7 +183,7 @@ export function MistakesPage() {
         title="错题复习"
         description="按知识点与到期时间安排复习；掌握、恢复和重新作答会同步更新统计。"
         helpAnchor="mistakes"
-        actions={<><button disabled={!rows.length} onClick={exportCsv} className="btn-outline px-3"><Icon name="download" size={15} /> 导出 CSV</button><button disabled={!rows.length} onClick={() => window.print()} className="btn-outline px-3"><Icon name="file-text" size={15} /> 打印</button></>}
+        actions={<><button disabled={total === 0 || exporting} onClick={() => void exportCsv()} className="btn-outline px-3"><Icon name="download" size={15} />{exporting ? '导出中…' : '导出 CSV'}</button><button disabled={rows.length === 0} onClick={() => window.print()} className="btn-outline px-3"><Icon name="file-text" size={15} /> 打印</button></>}
       />
 
       <section className="filter-panel card space-y-3 p-4" aria-label="错题筛选">
@@ -171,7 +198,7 @@ export function MistakesPage() {
         </div>
       </section>
 
-      <p className="text-sm text-ink2" aria-live="polite">当前筛选共 {rows.length} 道错题</p>
+      <p className="text-sm text-ink2" aria-live="polite">当前筛选共 {total} 道错题</p>
       {query.isPending ? <div className="space-y-3">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-44 rounded-2xl" />)}</div> : query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : rows.length === 0 ? (
         <EmptyState icon={filtered ? 'target' : 'party-popper'} title={filtered ? '没有符合筛选条件的错题' : '错题本是空的'} description={filtered ? '可清空筛选查看全部错题；已掌握题需切换到“已掌握”查看。' : '完成批改后，答错题会按知识点归集到这里。'} action={filtered ? <button onClick={() => setParams({})} className="btn-outline px-4">清空筛选</button> : undefined} />
       ) : (
@@ -179,6 +206,7 @@ export function MistakesPage() {
           {groups.map((group) => <section key={group.knowledge_point} className="mistake-group space-y-3"><h2 className="flex items-center gap-2 font-serif text-lg font-bold">{group.knowledge_point}<span className="badge bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">{group.questions.length} 题</span></h2><div className="grid gap-4 xl:grid-cols-2">{group.questions.map((question) => <MistakeCard key={`${question.job_id}-${question.id}`} question={question} />)}</div></section>)}
         </div>
       )}
+      <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={(value) => setParams((old) => { const next = new URLSearchParams(old); next.set('page', String(value)); return next })} />
     </div>
   )
 }

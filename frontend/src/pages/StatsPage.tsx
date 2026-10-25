@@ -1,13 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 import { api } from '../api'
 import { EmptyState } from '../components/EmptyState'
 import { ErrorState } from '../components/ErrorState'
 import { Icon } from '../components/Icon'
 import { PageHeader } from '../components/PageHeader'
+import { Pagination } from '../components/Pagination'
 import { StudentFilter } from '../components/StudentFilter'
 import type { OverviewJob, User } from '../types'
+import { emptyPageTarget } from '../utils/pagination'
+
+const JOB_PAGE_SIZE = 50
 
 interface TrendPoint { label: string; pct: number; id: string }
 
@@ -44,50 +48,38 @@ export function StatsPage() {
   const user = useOutletContext<User>()
   const [studentId, setStudentId] = useState<number | null>(null)
   const [days, setDays] = useState(30)
-  const query = useQuery({ queryKey: ['overview', { studentId, days }], queryFn: ({ signal }) => api.overview(studentId, days, { signal }) })
+  const [jobPage, setJobPage] = useState(0)
+  const query = useQuery({
+    queryKey: ['overview', { studentId, days, jobPage }],
+    queryFn: ({ signal }) => api.overview(studentId, days, { signal, jobLimit: JOB_PAGE_SIZE, jobOffset: jobPage * JOB_PAGE_SIZE }),
+  })
+  const jobTotal = query.data?.job_total ?? 0
+
+  useEffect(() => {
+    const target = emptyPageTarget(jobPage, jobTotal, JOB_PAGE_SIZE, query.data?.jobs.length)
+    if (target !== null) setJobPage(target)
+  }, [jobPage, jobTotal, query.data?.jobs.length])
+
+  function changeStudent(value: number | null) {
+    setStudentId(value)
+    setJobPage(0)
+  }
+
+  function changeDays(value: number) {
+    setDays(value)
+    setJobPage(0)
+  }
 
   if (query.isPending) return <div className="space-y-4">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-44 rounded-2xl" />)}</div>
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />
 
   const data = query.data
-  const jobs = (data.jobs ?? []).slice().sort((a, b) => a.created_at - b.created_at)
+  const jobs = data.jobs
   const knowledgePoints = data.knowledge_points ?? []
-  const summary = data.summary ?? {
-    total_jobs: jobs.length,
-    correct: jobs.reduce((sum, job) => sum + (job.stats.correct ?? 0), 0),
-    wrong: jobs.reduce((sum, job) => sum + (job.stats.wrong ?? 0), 0),
-    unknown: jobs.reduce((sum, job) => sum + (job.stats.unknown ?? 0), 0),
-    subjective: jobs.reduce((sum, job) => sum + (job.stats.subjective ?? 0), 0),
-  }
-  const noObjectiveJobs = summary.no_objective_jobs ?? jobs.filter((job) => gradedCount(job) === 0).length
+  const summary = data.summary
+  const noObjectiveJobs = summary.no_objective_jobs ?? 0
   const personalMode = studentId != null || user.role === 'student'
-
-  const personalPoints = jobs
-    .filter((job) => gradedCount(job) > 0 && (studentId == null || job.student_id == null || job.student_id === studentId))
-    .map((job) => ({
-      id: job.id,
-      label: new Date(job.created_at * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
-      pct: Math.round(((job.stats.correct ?? 0) / gradedCount(job)) * 100),
-    }))
-    .slice(-30)
-
-  const classDays = new Map<string, { correct: number; wrong: number; timestamp: number }>()
-  for (const job of jobs) {
-    if (gradedCount(job) === 0) continue
-    const date = new Date(job.created_at * 1000)
-    const key = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
-    const current = classDays.get(key) ?? { correct: 0, wrong: 0, timestamp: job.created_at }
-    current.correct += job.stats.correct ?? 0
-    current.wrong += job.stats.wrong ?? 0
-    classDays.set(key, current)
-  }
-  const classPoints = Array.from(classDays.entries()).map(([key, value]) => ({
-    id: key,
-    label: new Date(value.timestamp * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
-    pct: Math.round((value.correct / (value.correct + value.wrong)) * 100),
-  })).slice(-30)
-  const points = personalMode ? personalPoints : classPoints
-
+  const points = data.trend
   const coverage = data.knowledge_coverage
   const coveragePercent = typeof coverage === 'number'
     ? coverage
@@ -102,7 +94,7 @@ export function StatsPage() {
         title="学习统计"
         description="正确率只统计可客观判分的题目；待确认与主观题单独呈现。"
         helpAnchor="stats"
-        actions={<><StudentFilter value={studentId} onChange={setStudentId} /><label><span className="sr-only">统计时间范围</span><select value={days} onChange={(event) => setDays(Number(event.target.value))} className="input w-auto"><option value={7}>近 7 天</option><option value={30}>近 30 天</option><option value={90}>近 90 天</option><option value={365}>近一年</option></select></label></>}
+        actions={<><StudentFilter value={studentId} onChange={changeStudent} /><label><span className="sr-only">统计时间范围</span><select value={days} onChange={(event) => changeDays(Number(event.target.value))} className="input w-auto"><option value={7}>近 7 天</option><option value={30}>近 30 天</option><option value={90}>近 90 天</option><option value={365}>近一年</option></select></label></>}
       />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="统计摘要">
@@ -121,11 +113,12 @@ export function StatsPage() {
         {knowledgePoints.length > 0 && <div className="mt-5 space-y-2.5"><h3 className="text-sm font-semibold">{coveragePercent != null && coveragePercent < 100 ? '错题知识点分布' : '知识点错误率'}</h3>{knowledgePoints.map((item) => { const pct = item.total > 0 ? Math.round((item.wrong / item.total) * 100) : 0; return <div key={item.knowledge_point} className="flex items-center gap-3 text-sm"><span className="w-32 truncate text-right text-xs text-ink2 sm:w-44" title={item.knowledge_point}>{item.knowledge_point}</span><div className="h-4 flex-1 overflow-hidden rounded-full bg-surface-2"><div className={`h-full rounded-full ${pct >= 60 ? 'bg-rose-500' : pct >= 30 ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${Math.max(pct, 4)}%` }} /></div><span className="w-20 shrink-0 text-xs text-ink2">{item.wrong}/{item.total} 错</span></div> })}</div>}
       </section>
 
-      {studentSummaries.length > 0 && !personalMode && <section className="card overflow-hidden p-5"><h2 className="section-title mb-3">学生汇总</h2><div className="divide-y divide-line/60">{studentSummaries.map((item) => { const graded = item.correct + item.wrong; return <button key={item.student_id} onClick={() => setStudentId(item.student_id)} className="flex min-h-14 w-full flex-wrap items-center gap-2 py-2 text-left hover:text-primary-700 dark:hover:text-primary-300"><span className="min-w-0 flex-1 truncate font-medium">{item.student_name}</span><span className="text-xs text-ink2">{item.total_jobs} 次批改 · 待确认 {item.unknown} · 主观 {item.subjective}</span><span className="text-sm font-semibold">{graded > 0 ? `${Math.round((item.correct / graded) * 100)}%` : '未产生客观题正确率'}</span></button> })}</div></section>}
+      {studentSummaries.length > 0 && !personalMode && <section className="card overflow-hidden p-5"><h2 className="section-title mb-3">学生汇总</h2><div className="divide-y divide-line/60">{studentSummaries.map((item) => { const graded = item.correct + item.wrong; return <button key={item.student_id} onClick={() => changeStudent(item.student_id)} className="flex min-h-14 w-full flex-wrap items-center gap-2 py-2 text-left hover:text-primary-700 dark:hover:text-primary-300"><span className="min-w-0 flex-1 truncate font-medium">{item.student_name}</span><span className="text-xs text-ink2">{item.total_jobs} 次批改 · 待确认 {item.unknown} · 主观 {item.subjective}</span><span className="text-sm font-semibold">{graded > 0 ? `${Math.round((item.correct / graded) * 100)}%` : '未产生客观题正确率'}</span></button> })}</div></section>}
 
       <section className="card p-5">
         <h2 className="section-title mb-3 flex items-center gap-2"><Icon name="list" size={17} className="text-primary-600 dark:text-primary-400" /> 时间范围内的批改</h2>
-        {jobs.length === 0 ? <p className="py-8 text-center text-sm text-ink2">当前时间范围没有批改记录。</p> : <div className="divide-y divide-line/60 text-sm">{jobs.slice().reverse().map((job) => { const graded = gradedCount(job); return <Link key={job.id} to={`/jobs/${job.id}`} className="group flex min-h-12 flex-wrap items-center justify-between gap-2 py-2.5 hover:text-primary-700 dark:hover:text-primary-300"><span className="min-w-0 flex-1 truncate">{job.title}{job.student_name && <span className="ml-2 text-xs text-ink2">{job.student_name}</span>}</span><span className="shrink-0 text-xs text-ink2">{new Date(job.created_at * 1000).toLocaleDateString('zh-CN')} · {graded > 0 ? `${Math.round(((job.stats.correct ?? 0) / graded) * 100)}%` : '未产生客观题正确率'}</span></Link> })}</div>}
+        {jobs.length === 0 ? <p className="py-8 text-center text-sm text-ink2">当前时间范围没有批改记录。</p> : <div className="divide-y divide-line/60 text-sm">{jobs.map((job) => { const graded = gradedCount(job); return <Link key={job.id} to={`/jobs/${job.id}`} className="group flex min-h-12 flex-wrap items-center justify-between gap-2 py-2.5 hover:text-primary-700 dark:hover:text-primary-300"><span className="min-w-0 flex-1 truncate">{job.title}{job.student_name && <span className="ml-2 text-xs text-ink2">{job.student_name}</span>}</span><span className="shrink-0 text-xs text-ink2">{new Date(job.created_at * 1000).toLocaleDateString('zh-CN')} · {graded > 0 ? `${Math.round(((job.stats.correct ?? 0) / graded) * 100)}%` : '未产生客观题正确率'}</span></Link> })}</div>}
+        <Pagination page={jobPage} pageSize={JOB_PAGE_SIZE} total={data.job_total} onPage={setJobPage} />
       </section>
     </div>
   )

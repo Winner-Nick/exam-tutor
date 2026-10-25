@@ -1,7 +1,9 @@
-import { useUi, type Filter } from '../store'
+import { useMemo } from 'react'
 import type { Question } from '../types'
 
-const FILTERS: { key: Filter; label: string }[] = [
+export type QuestionFilter = 'all' | 'wrong' | 'unknown' | 'correct' | 'subjective'
+
+const FILTERS: { key: QuestionFilter; label: string }[] = [
   { key: 'all', label: '全部' },
   { key: 'wrong', label: '错题' },
   { key: 'unknown', label: '待确认' },
@@ -26,17 +28,28 @@ const STATUS_LABEL: Record<Question['status'], string> = {
   subjective: '主观题',
 }
 
-export function QuestionGrid({ questions }: { questions: Question[] }) {
-  const { filter, setFilter, selectedQid, setSelectedQid, setMobileTab } = useUi()
-
-  const counts: Record<Filter, number> = {
-    all: questions.length,
-    wrong: questions.filter((q) => q.status === 'wrong').length,
-    unknown: questions.filter((q) => q.status === 'unknown').length,
-    correct: questions.filter((q) => q.status === 'correct').length,
-    subjective: questions.filter((q) => q.status === 'subjective').length,
-  }
-  const visible = filter === 'all' ? questions : questions.filter((q) => q.status === filter)
+export function QuestionGrid({
+  questions,
+  filter,
+  selectedQid,
+  onFilterChange,
+  onSelectQuestion,
+}: {
+  questions: Question[]
+  filter: QuestionFilter
+  selectedQid: string | null
+  onFilterChange: (filter: QuestionFilter) => void
+  onSelectQuestion: (qid: string) => void
+}) {
+  const counts = useMemo(() => {
+    const result: Record<QuestionFilter, number> = { all: questions.length, wrong: 0, unknown: 0, correct: 0, subjective: 0 }
+    for (const question of questions) result[question.status] += 1
+    return result
+  }, [questions])
+  const visible = useMemo(
+    () => filter === 'all' ? questions : questions.filter((question) => question.status === filter),
+    [questions, filter],
+  )
 
   return (
     <div className="space-y-3">
@@ -44,7 +57,7 @@ export function QuestionGrid({ questions }: { questions: Question[] }) {
         {FILTERS.map((f) => (
           <button
             key={f.key}
-            onClick={() => setFilter(f.key)}
+            onClick={() => onFilterChange(f.key)}
             aria-pressed={filter === f.key}
             className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
               filter === f.key ? 'chip chip-active' : 'chip'
@@ -59,10 +72,7 @@ export function QuestionGrid({ questions }: { questions: Question[] }) {
         {visible.map((q) => (
           <button
             key={q.id}
-            onClick={() => {
-              setSelectedQid(q.id)
-              setMobileTab('detail')
-            }}
+            onClick={() => onSelectQuestion(q.id)}
             title={`第 ${q.number} 题，${STATUS_LABEL[q.status]}`}
             aria-label={`第 ${q.number} 题，${STATUS_LABEL[q.status]}${q.status !== 'correct' && q.explanation ? '，已有讲解' : ''}`}
             aria-pressed={selectedQid === q.id}

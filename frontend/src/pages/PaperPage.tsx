@@ -36,11 +36,11 @@ function AddQuestionRow({ paperId }: { paperId: string }) {
   })
 
   return (
-    <form className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-3" onSubmit={(event) => { event.preventDefault(); if (number.trim()) add.mutate() }}>
+    <form className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-3" onSubmit={(event) => { event.preventDefault(); if (number.trim() && type.length <= 30 && answer.length <= 500) add.mutate() }}>
       <label><span className="sr-only">新题号</span><input value={number} onChange={(event) => setNumber(event.target.value)} placeholder="题号" maxLength={20} className="input w-24" /></label>
-      <label><span className="sr-only">新题题型</span><input value={type} onChange={(event) => setType(event.target.value)} placeholder="题型（选填）" maxLength={40} className="input w-32" /></label>
-      <label className="min-w-40 flex-1"><span className="sr-only">新题标准答案</span><input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="标准答案" maxLength={1000} className="input" /></label>
-      <button type="submit" disabled={!number.trim() || add.isPending} className="btn-outline px-3 text-sm"><Icon name="plus" size={14} />{add.isPending ? '添加中…' : '添加题目'}</button>
+      <label><span className="sr-only">新题题型</span><input value={type} onChange={(event) => setType(event.target.value)} placeholder="题型（选填）" maxLength={30} className="input w-32" /></label>
+      <label className="min-w-40 flex-1"><span className="sr-only">新题标准答案</span><input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="标准答案" maxLength={500} className="input" /></label>
+      <button type="submit" disabled={!number.trim() || type.length > 30 || answer.length > 500 || add.isPending} className="btn-outline px-3 text-sm"><Icon name="plus" size={14} />{add.isPending ? '添加中…' : '添加题目'}</button>
     </form>
   )
 }

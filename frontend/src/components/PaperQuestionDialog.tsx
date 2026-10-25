@@ -47,24 +47,27 @@ export function PaperQuestionDialog({ paperId, question, onClose }: { paperId: s
     if (!parsed.error) save.mutate(parsed.options)
   }
 
+  const validLengths = type.length <= 30 && stem.length <= 10000 && passage.length <= 20000 &&
+    answer.length <= 500 && knowledgePoint.length <= 200
+
   return (
     <Dialog title={`编辑第 ${question.number} 题`} onClose={onClose} hideClose={save.isPending} preventClose={save.isPending} className="max-w-2xl">
       <form onSubmit={(event) => { event.preventDefault(); submit() }} className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-sm font-medium text-ink2">题号<input value={number} onChange={(event) => setNumber(event.target.value)} required maxLength={20} autoFocus className="input mt-1" /></label>
-          <label className="text-sm font-medium text-ink2">题型<input value={type} onChange={(event) => setType(event.target.value)} placeholder="如：单选、填空、解答" className="input mt-1" /></label>
+          <label className="text-sm font-medium text-ink2">题型<input value={type} onChange={(event) => setType(event.target.value)} maxLength={30} placeholder="如：单选、填空、解答" className="input mt-1" /></label>
         </div>
-        <label className="block text-sm font-medium text-ink2">题干<textarea value={stem} onChange={(event) => setStem(event.target.value)} rows={4} className="input mt-1" /></label>
+        <label className="block text-sm font-medium text-ink2">题干<textarea value={stem} onChange={(event) => setStem(event.target.value)} maxLength={10000} rows={4} className="input mt-1" /></label>
         <label className="block text-sm font-medium text-ink2">选项<span className="ml-1 text-xs font-normal text-dim">每行一个，如 A. 选项内容；续行请缩进，无选项题可留空</span><textarea value={options} onChange={(event) => { setOptions(event.target.value); setOptionsError(null) }} rows={4} aria-invalid={!!optionsError} aria-describedby={optionsError ? 'options-error' : undefined} className="input mt-1 font-mono" /></label>
         {optionsError && <p id="options-error" className="text-sm text-rose-700 dark:text-rose-300" role="alert">{optionsError}</p>}
-        <label className="block text-sm font-medium text-ink2">阅读材料 / 共用原文<textarea value={passage} onChange={(event) => setPassage(event.target.value)} rows={3} className="input mt-1" /></label>
+        <label className="block text-sm font-medium text-ink2">阅读材料 / 共用原文<textarea value={passage} onChange={(event) => setPassage(event.target.value)} maxLength={20000} rows={3} className="input mt-1" /></label>
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="text-sm font-medium text-ink2">标准答案<textarea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={2} className="input mt-1" placeholder="主观题也可填写参考答案" /></label>
-          <label className="text-sm font-medium text-ink2">知识点<textarea value={knowledgePoint} onChange={(event) => setKnowledgePoint(event.target.value)} rows={2} className="input mt-1" /></label>
+          <label className="text-sm font-medium text-ink2">标准答案<textarea value={answer} onChange={(event) => setAnswer(event.target.value)} maxLength={500} rows={2} className="input mt-1" placeholder="主观题也可填写参考答案" /></label>
+          <label className="text-sm font-medium text-ink2">知识点<textarea value={knowledgePoint} onChange={(event) => setKnowledgePoint(event.target.value)} maxLength={200} rows={2} className="input mt-1" /></label>
         </div>
         <p className="text-xs leading-relaxed text-ink2">保存标准答案或题目内容后，关联作答会按后端结果重新判分，旧讲解将按题目版本失效。</p>
         {save.isError && <p className="text-sm text-rose-700 dark:text-rose-300" role="alert">{save.error instanceof ApiError ? save.error.message : '保存失败，请重试'}</p>}
-        <div className="flex justify-end gap-2"><button type="button" disabled={save.isPending} onClick={onClose} className="btn-ghost px-4">取消</button><button disabled={!number.trim() || save.isPending} className="btn-primary px-5">{save.isPending ? '保存中…' : '保存题目'}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" disabled={save.isPending} onClick={onClose} className="btn-ghost px-4">取消</button><button disabled={!number.trim() || !validLengths || save.isPending} className="btn-primary px-5">{save.isPending ? '保存中…' : '保存题目'}</button></div>
       </form>
     </Dialog>
   )

@@ -26,7 +26,8 @@ const studentNav: typeof teacherNav = [
 ]
 
 function Shell({ user, children }: { user: User; children: ReactNode }) {
-  const { theme, toggleTheme } = useUi()
+  const theme = useUi((state) => state.theme)
+  const toggleTheme = useUi((state) => state.toggleTheme)
   const { startTour } = useGuide()
   const [showFeedback, setShowFeedback] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)

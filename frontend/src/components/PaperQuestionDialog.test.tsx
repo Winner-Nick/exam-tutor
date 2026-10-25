@@ -43,3 +43,20 @@ it('shows a parse error and does not save malformed options', async () => {
   expect(await screen.findByRole('alert')).toHaveTextContent('第 1 行无法解析')
   expect(update).not.toHaveBeenCalled()
 })
+
+it('enforces backend field lengths before saving', () => {
+  const update = vi.spyOn(api, 'updatePaperQuestion')
+  renderDialog(question(null))
+
+  expect(screen.getByRole('textbox', { name: '题号' })).toHaveAttribute('maxlength', '20')
+  expect(screen.getByRole('textbox', { name: '题型' })).toHaveAttribute('maxlength', '30')
+  expect(screen.getByRole('textbox', { name: '题干' })).toHaveAttribute('maxlength', '10000')
+  expect(screen.getByRole('textbox', { name: /阅读材料/ })).toHaveAttribute('maxlength', '20000')
+  expect(screen.getByRole('textbox', { name: '标准答案' })).toHaveAttribute('maxlength', '500')
+  expect(screen.getByRole('textbox', { name: '知识点' })).toHaveAttribute('maxlength', '200')
+
+  fireEvent.change(screen.getByRole('textbox', { name: '题型' }), { target: { value: 'x'.repeat(31) } })
+  expect(screen.getByRole('button', { name: '保存题目' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: '保存题目' }))
+  expect(update).not.toHaveBeenCalled()
+})

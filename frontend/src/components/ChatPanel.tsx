@@ -2,18 +2,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
 import type { ChatMessage, Question } from '../types'
+import { mergeChatMessages } from '../utils/chatHistory'
 import { ErrorState } from './ErrorState'
 import { Icon } from './Icon'
 import { Markdown } from './Markdown'
 import { Spinner } from './Spinner'
 import { useToast } from './Toast'
 
-interface ChatEntry extends ChatMessage {
-  id?: string
-}
+const CHAT_PAGE_SIZE = 50
 
 interface ChatCache {
-  messages: ChatEntry[]
+  messages: ChatMessage[]
+  hasMore: boolean
 }
 
 interface AskVariables {
@@ -37,15 +37,22 @@ export function ChatPanel({
   const qc = useQueryClient()
   const toast = useToast()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const composing = useRef(false)
   const inFlight = useRef(false)
   const nextOptimisticId = useRef(0)
+  const olderController = useRef<AbortController | null>(null)
+  const historyGeneration = useRef(0)
+  const preserveScroll = useRef(false)
   const input = drafts[scope] ?? ''
 
   const chat = useQuery<ChatCache>({
     queryKey: ['chat', jobId, qid],
-    queryFn: ({ signal }) => api.getChat(jobId, qid, { signal }),
+    queryFn: async ({ signal }) => {
+      const page = await api.getChat(jobId, qid, { signal, limit: CHAT_PAGE_SIZE })
+      return { messages: page.messages, hasMore: page.has_more }
+    },
   })
 
   const ask = useMutation({
@@ -55,15 +62,18 @@ export function ChatPanel({
       await qc.cancelQueries({ queryKey: key })
       qc.setQueryData<ChatCache>(key, (old) => ({
         messages: [...(old?.messages ?? []), { id: variables.optimisticId, role: 'user', content: variables.text }],
+        hasMore: old?.hasMore ?? false,
       }))
     },
     onSuccess: ({ answer }, variables) => {
       qc.setQueryData<ChatCache>(['chat', variables.jobId, variables.qid], (old) => ({
         messages: [...(old?.messages ?? []), { id: `${variables.optimisticId}:answer`, role: 'assistant', content: answer }],
+        hasMore: old?.hasMore ?? false,
       }))
     },
     onError: (error, variables) => {
       qc.setQueryData<ChatCache>(['chat', variables.jobId, variables.qid], (old) => old ? {
+        ...old,
         messages: old.messages.filter((message) => message.id !== variables.optimisticId),
       } : old)
       const failedScope = `${variables.jobId}:${variables.qid ?? 'paper'}`
@@ -81,6 +91,18 @@ export function ChatPanel({
   const currentSuccess = ask.isSuccess && ask.variables?.jobId === jobId && ask.variables.qid === qid
 
   useEffect(() => {
+    historyGeneration.current += 1
+    olderController.current?.abort()
+    olderController.current = null
+    setLoadingOlder(false)
+  }, [scope])
+  useEffect(() => () => olderController.current?.abort(), [])
+
+  useEffect(() => {
+    if (preserveScroll.current) {
+      preserveScroll.current = false
+      return
+    }
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: reduced ? 'auto' : 'smooth' })
   }, [chat.data?.messages.length, currentPending, qid, jobId])
@@ -104,6 +126,34 @@ export function ChatPanel({
   }
 
   const messages = chat.data?.messages ?? []
+  const hasMore = chat.data?.hasMore ?? false
+  const beforeId = messages.find((message) => typeof message.id === 'number')?.id as number | undefined
+
+  async function loadOlder() {
+    if (!hasMore || beforeId == null || olderController.current) return
+    const controller = new AbortController()
+    const generation = historyGeneration.current
+    olderController.current = controller
+    setLoadingOlder(true)
+    try {
+      const page = await api.getChat(jobId, qid, { limit: CHAT_PAGE_SIZE, beforeId, signal: controller.signal })
+      if (generation !== historyGeneration.current) return
+      preserveScroll.current = true
+      qc.setQueryData<ChatCache>(['chat', jobId, qid], (old) => ({
+        messages: mergeChatMessages(old?.messages ?? [], page.messages),
+        hasMore: page.has_more ?? false,
+      }))
+    } catch (error) {
+      if (generation === historyGeneration.current && !(error instanceof ApiError && error.code === 'abort')) {
+        toast(error instanceof ApiError ? error.message : '加载更早消息失败，请重试', 'error')
+      }
+    } finally {
+      if (generation === historyGeneration.current) {
+        olderController.current = null
+        setLoadingOlder(false)
+      }
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -121,7 +171,7 @@ export function ChatPanel({
         )}
       </div>
 
-      <div ref={listRef} className="thin-scroll flex-1 space-y-3 overflow-y-auto py-3" aria-busy={chat.isPending || currentPending}>
+      <div ref={listRef} className="thin-scroll flex-1 space-y-3 overflow-y-auto py-3" aria-busy={chat.isPending || currentPending || loadingOlder}>
         {chat.isPending ? (
           <div className="flex h-full min-h-32 items-center justify-center gap-2 text-sm text-ink2">
             <Spinner /> 正在加载这段对话…
@@ -130,6 +180,7 @@ export function ChatPanel({
           <ErrorState error={chat.error} compact title="对话加载失败" onRetry={() => void chat.refetch()} />
         ) : (
           <>
+            {hasMore && <div className="text-center"><button disabled={beforeId == null || loadingOlder} onClick={() => void loadOlder()} className="btn-outline px-3 py-1.5 text-xs">{loadingOlder ? '正在加载更早消息…' : '加载更早消息'}</button></div>}
             {messages.length === 0 && !currentPending && (
               <div className="space-y-3 py-6 text-center text-xs text-ink2">
                 <Icon name="chat" size={26} className="mx-auto text-dim" />

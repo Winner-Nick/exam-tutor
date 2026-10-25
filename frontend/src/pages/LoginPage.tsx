@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { Icon } from '../components/Icon'
 import { Spinner } from '../components/Spinner'
-import { resetWorkspaceUi, useUi } from '../store'
+import { useUi } from '../store'
 
 const FEATURES: { icon: Parameters<typeof Icon>[0]['name']; title: string; desc: string }[] = [
   { icon: 'camera', title: '拍照批改', desc: '手机拍照上传，清晰判分' },
@@ -21,7 +21,8 @@ export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const qc = useQueryClient()
-  const { theme, toggleTheme } = useUi()
+  const theme = useUi((state) => state.theme)
+  const toggleTheme = useUi((state) => state.toggleTheme)
   const options = useQuery({ queryKey: ['registration-options'], queryFn: api.registrationOptions, retry: 1 })
   const state = location.state as { from?: string; reason?: string } | null
   const bootstrap = options.data?.bootstrap ?? false
@@ -35,7 +36,6 @@ export function LoginPage() {
         : api.register(username.trim(), password, needsInvite ? invite.trim() || null : null),
     onSuccess: (user) => {
       qc.clear()
-      resetWorkspaceUi()
       qc.setQueryData(['me'], user)
       const target = state?.from?.startsWith('/') && !state.from.startsWith('//') ? state.from : '/'
       navigate(target, { replace: true })

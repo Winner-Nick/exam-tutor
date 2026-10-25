@@ -156,6 +156,8 @@ export interface MistakeFilters {
   review?: 'all' | 'pending' | 'mastered' | 'due'
   q?: string
   days?: number
+  limit?: number
+  offset?: number
 }
 
 export type PaperQuestionInput = Partial<
@@ -350,8 +352,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ question, qid }),
     }),
-  getChat: (jobId: string, qid: string | null, options?: RequestOptions) =>
-    request<{ messages: ChatMessage[] }>(`/api/jobs/${jobId}/chat${qid ? `?qid=${encodeURIComponent(qid)}` : ''}`, { signal: options?.signal }),
+  getChat: (jobId: string, qid: string | null, options?: RequestOptions & { limit?: number; beforeId?: number }) => {
+    const search = new URLSearchParams()
+    if (qid) search.set('qid', qid)
+    if (options?.limit != null) search.set('limit', String(options.limit))
+    if (options?.beforeId != null) search.set('before_id', String(options.beforeId))
+    return request<{ messages: ChatMessage[]; has_more: boolean }>(`/api/jobs/${jobId}/chat${search.size ? `?${search}` : ''}`, { signal: options?.signal })
+  },
 
   sendFeedback: (message: string, page: string, diag: Record<string, unknown>) =>
     request<{ id: number }>('/api/feedback', {
@@ -372,14 +379,18 @@ export const api = {
     if (filters.review && filters.review !== 'all') search.set('review', filters.review)
     if (filters.q?.trim()) search.set('q', filters.q.trim())
     if (filters.days) search.set('days', String(filters.days))
-    return request<{ groups: { knowledge_point: string; questions: MistakeQuestion[] }[] }>(
+    if (filters.limit != null) search.set('limit', String(filters.limit))
+    if (filters.offset != null) search.set('offset', String(filters.offset))
+    return request<{ groups: { knowledge_point: string; questions: MistakeQuestion[] }[]; total: number; limit: number; offset: number }>(
       `/api/mistakes${search.size ? `?${search}` : ''}`,
       { signal: options?.signal },
     )
   },
-  overview: (studentId?: number | null, days = 30, options?: RequestOptions) => {
+  overview: (studentId?: number | null, days = 30, options?: RequestOptions & { jobLimit?: number; jobOffset?: number }) => {
     const search = new URLSearchParams({ days: String(days) })
     if (studentId != null) search.set('student_id', String(studentId))
+    if (options?.jobLimit != null) search.set('job_limit', String(options.jobLimit))
+    if (options?.jobOffset != null) search.set('job_offset', String(options.jobOffset))
     return request<Overview>(`/api/stats/overview?${search}`, { signal: options?.signal })
   },
 }

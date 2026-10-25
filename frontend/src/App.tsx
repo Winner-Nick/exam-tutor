@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError, UNAUTHORIZED_EVENT } from './api'
 import { AppShell } from './components/AppShell'
@@ -7,17 +7,17 @@ import { ErrorState } from './components/ErrorState'
 import { Spinner } from './components/Spinner'
 import { ToastProvider } from './components/Toast'
 import { DashboardPage } from './pages/DashboardPage'
-import { DownloadPage } from './pages/DownloadPage'
-import { GuidePage } from './pages/GuidePage'
-import { JobPage } from './pages/JobPage'
 import { LoginPage } from './pages/LoginPage'
-import { MistakesPage } from './pages/MistakesPage'
-import { PaperPage } from './pages/PaperPage'
-import { PapersPage } from './pages/PapersPage'
-import { SettingsPage } from './pages/SettingsPage'
-import { StatsPage } from './pages/StatsPage'
-import { StudentsPage } from './pages/StudentsPage'
-import { resetWorkspaceUi } from './store'
+
+const DownloadPage = lazy(() => import('./pages/DownloadPage').then((module) => ({ default: module.DownloadPage })))
+const GuidePage = lazy(() => import('./pages/GuidePage').then((module) => ({ default: module.GuidePage })))
+const JobPage = lazy(() => import('./pages/JobPage').then((module) => ({ default: module.JobPage })))
+const MistakesPage = lazy(() => import('./pages/MistakesPage').then((module) => ({ default: module.MistakesPage })))
+const PaperPage = lazy(() => import('./pages/PaperPage').then((module) => ({ default: module.PaperPage })))
+const PapersPage = lazy(() => import('./pages/PapersPage').then((module) => ({ default: module.PapersPage })))
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })))
+const StatsPage = lazy(() => import('./pages/StatsPage').then((module) => ({ default: module.StatsPage })))
+const StudentsPage = lazy(() => import('./pages/StudentsPage').then((module) => ({ default: module.StudentsPage })))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,7 +36,6 @@ function SessionEvents() {
   useEffect(() => {
     const unauthorized = () => {
       qc.clear()
-      resetWorkspaceUi()
       if (location.pathname !== '/login') {
         navigate('/login', {
           replace: true,
@@ -72,7 +71,9 @@ function Protected() {
   }
   return (
     <AppShell user={me.data}>
-      <Outlet context={me.data} />
+      <Suspense fallback={<div className="flex justify-center py-20" role="status"><Spinner className="h-8 w-8" /><span className="sr-only">正在加载页面</span></div>}>
+        <Outlet context={me.data} />
+      </Suspense>
     </AppShell>
   )
 }
@@ -88,7 +89,7 @@ const router = createBrowserRouter([
     element: <SessionEvents />,
     children: [
       { path: '/login', element: <LoginPage /> },
-      { path: '/download', element: <DownloadPage /> },
+      { path: '/download', element: <Suspense fallback={<div className="flex justify-center py-20" role="status"><Spinner className="h-8 w-8" /></div>}><DownloadPage /></Suspense> },
       {
         element: <Protected />,
         children: [

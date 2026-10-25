@@ -1,10 +1,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { useState } from 'react'
 import { expect, it } from 'vitest'
 import type { Question } from '../types'
 import { DonutChart } from './DonutChart'
-import { QuestionGrid } from './QuestionGrid'
+import { QuestionGrid, type QuestionFilter } from './QuestionGrid'
 import { StudentFilter } from './StudentFilter'
+
+function QuestionGridHarness({ question }: { question: Question }) {
+  const [filter, setFilter] = useState<QuestionFilter>('all')
+  const [selectedQid, setSelectedQid] = useState<string | null>(null)
+  return <QuestionGrid questions={[question]} filter={filter} selectedQid={selectedQid} onFilterChange={setFilter} onSelectQuestion={setSelectedQid} />
+}
 
 it('gives student filters and charts readable names', () => {
   const qc = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } })
@@ -27,7 +34,7 @@ it('exposes question selection and status to assistive technology', () => {
     student_answer: null, correct_answer: 'A', status: 'wrong', knowledge_point: null,
     explanation: {}, explain_state: 'done', revision: 1,
   }
-  render(<QuestionGrid questions={[question]} />)
+  render(<QuestionGridHarness question={question} />)
   const item = screen.getByRole('button', { name: '第 1 题，答错，已有讲解' })
   expect(item).toHaveAttribute('aria-pressed', 'false')
   expect(screen.getByRole('button', { name: '全部 1' })).toHaveAttribute('aria-pressed', 'true')

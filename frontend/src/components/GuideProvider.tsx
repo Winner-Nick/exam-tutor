@@ -1,5 +1,7 @@
 import {
   createContext,
+  lazy,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -8,10 +10,11 @@ import {
   type ReactNode,
 } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Onboarding } from './Onboarding'
-import { ProductTour } from './ProductTour'
 import type { GuideRole } from './guideContent'
 import type { User } from '../types'
+
+const Onboarding = lazy(() => import('./Onboarding').then((module) => ({ default: module.Onboarding })))
+const ProductTour = lazy(() => import('./ProductTour').then((module) => ({ default: module.ProductTour })))
 
 interface StoredGuideState {
   onboardingSeen: boolean
@@ -153,22 +156,24 @@ function GuideSession({ user, children }: { user: User; children: ReactNode }) {
   return (
     <GuideContext.Provider value={value}>
       {children}
-      {onboardingOpen && (
-        <Onboarding
-          user={user}
-          onClose={closeOnboarding}
-          onStartTour={startTour}
-          onOpenGuide={() => openGuide()}
-        />
-      )}
-      {tourActive && (
-        <ProductTour
-          key={`${tourRun}:${role}`}
-          user={user}
-          onClose={closeTour}
-          onOpenGuide={openGuide}
-        />
-      )}
+      <Suspense fallback={<div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 text-sm text-white" role="status">正在加载引导内容…</div>}>
+        {onboardingOpen && (
+          <Onboarding
+            user={user}
+            onClose={closeOnboarding}
+            onStartTour={startTour}
+            onOpenGuide={() => openGuide()}
+          />
+        )}
+        {tourActive && (
+          <ProductTour
+            key={`${tourRun}:${role}`}
+            user={user}
+            onClose={closeTour}
+            onOpenGuide={openGuide}
+          />
+        )}
+      </Suspense>
     </GuideContext.Provider>
   )
 }

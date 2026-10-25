@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Icon } from './Icon'
 
 interface ToastItem {
@@ -16,11 +16,21 @@ export function useToast() {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([])
   const nextId = useRef(1)
+  const timers = useRef<Set<number>>(new Set())
+
+  useEffect(() => () => {
+    timers.current.forEach((timer) => window.clearTimeout(timer))
+    timers.current.clear()
+  }, [])
 
   const push = useCallback((text: string, kind: 'info' | 'error' = 'info') => {
     const id = nextId.current++
     setItems((xs) => [...xs, { id, text, kind }])
-    setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== id)), 3500)
+    const timer = window.setTimeout(() => {
+      timers.current.delete(timer)
+      setItems((xs) => xs.filter((x) => x.id !== id))
+    }, 3500)
+    timers.current.add(timer)
   }, [])
 
   return (

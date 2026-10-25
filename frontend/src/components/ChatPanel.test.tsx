@@ -6,7 +6,7 @@ import { api, ApiError } from '../api'
 import type { ChatMessage, Question } from '../types'
 import { ChatPanel } from './ChatPanel'
 
-type CachedMessage = ChatMessage & { id?: string }
+type CachedMessage = ChatMessage
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -26,7 +26,7 @@ function question(id: string): Question {
 function setup(qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })) {
   qc.setQueryData(['chat', 'job', 'q1'], { messages: [{ role: 'assistant', content: '旧内容' }] })
   qc.setQueryData(['chat', 'job', null], { messages: [] })
-  vi.spyOn(api, 'getChat').mockImplementation(async () => ({ messages: [] }))
+  vi.spyOn(api, 'getChat').mockImplementation(async () => ({ messages: [], has_more: false }))
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() })
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   const view = render(<ChatPanel jobId="job" question={question('q1')} onClearFocus={() => undefined} />, { wrapper })
@@ -82,4 +82,34 @@ it('removes only the failed temporary message and preserves newer cache content'
   await waitFor(() => expect(cache(qc, 'q1').some((message) => message.id === optimistic?.id)).toBe(false))
   expect(cache(qc, 'q1').map((message) => message.content)).toEqual(['旧内容', '更新到的新内容'])
   expect(screen.getByLabelText('输入答疑问题')).toHaveValue('会失败的问题')
+})
+
+it('loads older messages with before_id and merges them in order without duplicates', async () => {
+  const { qc } = setup()
+  qc.setQueryData(['chat', 'job', 'q1'], {
+    messages: [
+      { id: 3, role: 'user', content: '第三条' },
+      { id: 4, role: 'assistant', content: '第四条' },
+    ],
+    hasMore: true,
+  })
+  const getChat = vi.mocked(api.getChat)
+  getChat.mockImplementation(async (_jobId, _qid, options) => ({
+    messages: options?.beforeId
+      ? [
+          { id: 1, role: 'user', content: '第一条' },
+          { id: 2, role: 'assistant', content: '第二条' },
+          { id: 3, role: 'user', content: '重复第三条' },
+        ]
+      : [],
+    has_more: false,
+  }))
+
+  fireEvent.click(await screen.findByRole('button', { name: '加载更早消息' }))
+
+  await waitFor(() => expect(getChat).toHaveBeenCalledWith('job', 'q1', expect.objectContaining({ limit: 50, beforeId: 3 })))
+  await waitFor(() => expect(cache(qc, 'q1')).toHaveLength(4))
+  expect(cache(qc, 'q1').map((message) => message.id)).toEqual([1, 2, 3, 4])
+  expect(cache(qc, 'q1').map((message) => message.content)).toEqual(['第一条', '第二条', '第三条', '第四条'])
+  expect(screen.queryByRole('button', { name: '加载更早消息' })).not.toBeInTheDocument()
 })

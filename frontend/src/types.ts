@@ -169,6 +169,7 @@ export interface Paper {
 }
 
 export interface ChatMessage {
+  id?: number | string
   role: 'user' | 'assistant'
   content: string
 }
@@ -240,8 +241,22 @@ export interface StudentSummary {
   subjective: number
 }
 
+export interface OverviewTrendPoint {
+  id: string
+  label: string
+  pct: number
+  created_at?: number
+  date?: string
+  correct?: number
+  wrong?: number
+}
+
 export interface Overview {
   jobs: OverviewJob[]
+  job_total: number
+  job_limit: number
+  job_offset: number
+  trend: OverviewTrendPoint[]
   knowledge_points: { knowledge_point: string; wrong: number; total: number }[]
   summary: OverviewSummary
   knowledge_coverage: KnowledgeCoverage | number

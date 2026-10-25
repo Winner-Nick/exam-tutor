@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
 import { useSerialTasks } from '../hooks/useSerialTasks'
 import type { Job, Question } from '../types'
+import { choiceLabels, isMultipleChoice, sameChoiceLabels } from '../utils/choiceAnswers'
 import { invalidateLearningData } from '../utils/query'
 import { ExplanationCard } from './ExplanationCard'
 import { Icon } from './Icon'
@@ -25,9 +26,12 @@ export function QuestionDetail({
   const { busy, enqueue } = useSerialTasks()
   const [showPassage, setShowPassage] = useState(false)
   const [answerDraft, setAnswerDraft] = useState(question.student_answer ?? '')
+  const multiple = isMultipleChoice(question)
+  const [choiceDraft, setChoiceDraft] = useState<Set<string>>(() => choiceLabels(question.student_answer))
 
   useEffect(() => {
     setAnswerDraft(question.student_answer ?? '')
+    setChoiceDraft(choiceLabels(question.student_answer))
     setShowPassage(false)
   }, [question.id, question.revision, question.student_answer])
 
@@ -65,7 +69,16 @@ export function QuestionDetail({
   }
 
   const opts = question.options ? Object.entries(question.options) : []
-  const answerDirty = answerDraft !== (question.student_answer ?? '')
+  const correctLabels = choiceLabels(question.correct_answer)
+  const studentLabels = choiceLabels(question.student_answer)
+  const answerDirty = multiple
+    ? !sameChoiceLabels(choiceDraft, studentLabels)
+    : answerDraft !== (question.student_answer ?? '')
+
+  function saveChoices() {
+    const answer = opts.map(([key]) => key).filter((key) => choiceDraft.has(key)).join('') || null
+    void updateOverride({ student_answer: answer })
+  }
 
   return (
     <div className="space-y-4" aria-busy={busy}>
@@ -106,8 +119,8 @@ export function QuestionDetail({
       {opts.length > 0 && (
         <div className="space-y-1.5">
           {opts.map(([key, value]) => {
-            const isStudent = question.student_answer === key
-            const isCorrect = question.correct_answer === key
+            const isStudent = multiple ? choiceDraft.has(key) : studentLabels.has(key)
+            const isCorrect = correctLabels.has(key)
             const className = `flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left text-sm ${
               isCorrect
                 ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20'
@@ -125,12 +138,32 @@ export function QuestionDetail({
                 </span>
               </>
             )
+            if (canEdit && multiple) {
+              return (
+                <label key={key} className={className}>
+                  <input
+                    type="checkbox"
+                    checked={choiceDraft.has(key)}
+                    disabled={busy}
+                    onChange={() => setChoiceDraft((old) => {
+                      const next = new Set(old)
+                      if (next.has(key)) next.delete(key)
+                      else next.add(key)
+                      return next
+                    })}
+                    className="mt-1 h-4 w-4 shrink-0 accent-primary-600"
+                  />
+                  {content}
+                </label>
+              )
+            }
             return canEdit ? (
               <button key={key} type="button" disabled={busy} onClick={() => void updateOverride({ student_answer: key })} className={className}>{content}</button>
             ) : (
               <div key={key} className={className}>{content}</div>
             )
           })}
+          {canEdit && multiple && <button disabled={!answerDirty || busy} onClick={saveChoices} className="btn-primary mt-2 px-4">保存作答</button>}
         </div>
       )}
 
