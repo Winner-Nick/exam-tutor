@@ -6,10 +6,12 @@ import re
 import shutil
 import threading
 import unicodedata
+import weakref
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 
 from . import events, llm, pdf_utils, prompts, store
+from .db import transaction
 
 _CONF = {"high": 3, "medium": 2, "low": 1}
 _SUBJECTIVE_HINT = (
@@ -142,53 +144,230 @@ def build_questions(pages: list[dict]) -> tuple[list[dict], dict]:
     return questions, answer_key
 
 
-def build_paper_questions(pages: list[dict]) -> list[dict]:
-    """试卷入库：合并题目与标准答案，不含学生作答。
+def _normalize_full_page(page: dict) -> dict:
+    normalized = dict(page)
+    occurrences: list[dict] = []
+    raw_occurrences = page.get("answer_occurrences")
+    if isinstance(raw_occurrences, list):
+        for item in raw_occurrences:
+            if not isinstance(item, dict) or not str(item.get("answer") or "").strip():
+                continue
+            occurrence = dict(item)
+            occurrence["section"] = item.get("section")
+            occurrence["local_number"] = str(
+                item.get("local_number") or item.get("number") or ""
+            ).strip()
+            occurrence["page"] = item.get("page") or page.get("_file_page") or page.get("page")
+            occurrence["answer"] = str(item["answer"]).strip()
+            occurrences.append(occurrence)
+    for number, answer in (page.get("answer_key") or {}).items():
+        if not str(answer or "").strip():
+            continue
+        occurrences.append({
+            "section": None, "local_number": str(number).strip(),
+            "page": page.get("_file_page") or page.get("page"),
+            "answer": str(answer).strip(), "_legacy": True,
+        })
+    normalized["answer_occurrences"] = occurrences
+    return normalized
 
-    只传了答案（没有题目页）时，按 answer_key 的题号生成"题干为空"的存根题，
-    照样可以批改判分；题干等信息老师可后续补充或忽略。
-    """
-    order, qmap, answer_key = _merge_pages(pages)
-    questions: list[dict] = []
-    for num in sorted(order, key=_num_key):
-        c = qmap[num]
-        conflict = bool(c.get("_answer_conflict"))
-        questions.append({
-            "id": "q" + num, "number": num, "section": c.get("section"),
-            "type": c.get("type"), "stem": c.get("stem"),
-            "options": c.get("options") or None, "passage": c.get("passage"),
-            "correct_answer": None if conflict else _answer_for(answer_key, num),
-            "knowledge_point": None,
-            "needs_review": bool(c.get("needs_review") or conflict),
-        })
-    known = {store.normalize_number_key(number) for number in order}
-    ambiguous = {
-        store.normalize_number_key(q["_original_number"])
-        for p in pages for q in (p.get("questions") or [])
-        if q.get("needs_review") and q.get("_original_number")
+
+def _prepare_source_occurrences(pages: list[dict]) -> None:
+    for page in pages:
+        normalized = _normalize_full_page(page)
+        page.clear()
+        page.update(normalized)
+        file_page = page.get("_file_page") or page.get("page")
+        file_sha = page.get("_file_sha") or page.get("file_sha256")
+        for index, question in enumerate(page.get("questions") or [], start=1):
+            local_number = str(question.get("_original_number") or question.get("number") or "").strip()
+            source_key = (
+                f"{file_sha}:{file_page}:q:{index}" if file_sha and file_page is not None else None
+            )
+            question["_source_key"] = source_key
+            question["_source_uid"] = source_key or f"page:{page.get('page', 0)}:q:{index}"
+            question["_source_occurrence"] = {
+                "file_sha256": file_sha, "page": file_page, "index": index,
+                "local_number": local_number, "section": question.get("section"),
+                "continuation": question.get("continuation"),
+            }
+            question.setdefault("_original_number", local_number)
+        for index, answer in enumerate(page.get("answer_occurrences") or [], start=1):
+            source_key = (
+                f"{file_sha}:{file_page}:a:{index}" if file_sha and file_page is not None else None
+            )
+            answer["file_sha256"] = file_sha
+            answer["_source_key"] = source_key
+            answer["_answer_uid"] = source_key or f"page:{page.get('page', 0)}:a:{index}"
+            answer["_original_number"] = str(
+                answer.get("local_number") or answer.get("number") or ""
+            ).strip()
+
+
+def _new_paper_occurrence(question: dict) -> dict:
+    source = dict(question["_source_occurrence"])
+    source_key = question.get("_source_key")
+    return {
+        "id": store.new_question_id(), "number": str(question.get("number") or "").strip() or None,
+        "section": question.get("section"), "type": question.get("type"),
+        "stem": question.get("stem") or "", "options": question.get("options") or None,
+        "passage": question.get("passage"), "correct_answer": None, "knowledge_point": None,
+        "needs_review": bool(question.get("needs_review") or not source_key),
+        "source_key": source_key, "source_occurrence": source,
+        "source_occurrences": [source], "aliases": [source_key] if source_key else [],
+        "_source_uid": question["_source_uid"],
+        "_original_numbers": {store.normalize_number_key(question.get("_original_number"))},
+        "_answer_values": [], "_answer_conflict": False,
     }
-    conflicts = _number_conflicts(pages)
-    conflict_stubs: dict[str, str] = {}
-    for p in pages:
-        for number in (p.get("answer_key") or {}):
-            num, key = str(number).strip(), store.normalize_number_key(number)
-            if key in conflicts and key not in known and key not in ambiguous:
-                conflict_stubs.setdefault(key, num)
-    for num in conflict_stubs.values():
-        questions.append({
-            "id": "q" + num, "number": num, "section": None, "type": None,
-            "stem": None, "options": None, "passage": None,
-            "correct_answer": None, "knowledge_point": None, "needs_review": True,
-        })
-    for num, ans in answer_key.items():
-        key = store.normalize_number_key(num)
-        if key not in known and key not in ambiguous and ans.strip().rstrip("。.") != "略":
-            questions.append({
-                "id": "q" + num, "number": num, "section": None, "type": None,
-                "stem": None, "options": None, "passage": None,
-                "correct_answer": ans, "knowledge_point": None,
-            })
-    questions.sort(key=lambda q: _num_key(q["number"]))
+
+
+def _merge_paper_continuation(target: dict, question: dict) -> None:
+    source = dict(question["_source_occurrence"])
+    target["source_occurrences"].append(source)
+    if question.get("_source_key"):
+        target["aliases"] = sorted(set(target["aliases"]) | {question["_source_key"]})
+    target["_original_numbers"].add(store.normalize_number_key(question.get("_original_number")))
+    target["needs_review"] = bool(target["needs_review"] or question.get("needs_review"))
+    for field in ("section", "type", "passage"):
+        if not target.get(field) and question.get(field):
+            target[field] = question[field]
+    if len(question.get("stem") or "") > len(target.get("stem") or ""):
+        target["stem"] = question["stem"]
+    options = question.get("options")
+    if options and len(options) > len(target.get("options") or {}):
+        target["options"] = options
+
+
+def _answer_stub(answer: dict, *, legacy: bool) -> dict:
+    number = str(answer.get("_global") or answer.get("_original_number") or "").strip() or None
+    source = {
+        "file_sha256": answer.get("file_sha256"),
+        "page": answer.get("page"), "local_number": answer.get("_original_number"),
+        "section": answer.get("section"), "kind": "answer",
+        "observed_answer": answer.get("answer"),
+    }
+    return {
+        "id": store.new_question_id(), "number": number, "section": answer.get("section"),
+        "type": None, "stem": None, "options": None, "passage": None,
+        "correct_answer": answer.get("answer") if legacy else None,
+        "knowledge_point": None, "needs_review": not legacy or not answer.get("_source_key"),
+        "source_key": answer.get("_source_key"), "source_occurrence": source,
+        "source_occurrences": [source],
+        "aliases": [answer["_source_key"]] if answer.get("_source_key") else [],
+    }
+
+
+def build_paper_questions(pages: list[dict]) -> list[dict]:
+    """按 source occurrence 合并试卷题目，并逐条关联标准答案。"""
+    _prepare_source_occurrences(pages)
+    questions: list[dict] = []
+    question_targets: dict[str, dict] = {}
+    continuation_targets: dict[tuple[str, int, int], str] = {}
+    for page in pages:
+        file_sha = page.get("_file_sha") or page.get("file_sha256")
+        for index, question in enumerate(page.get("questions") or [], start=1):
+            if file_sha:
+                continuation_targets[(file_sha, page.get("_file_page") or page.get("page"), index)] = (
+                    question["_source_uid"]
+                )
+    for page in pages:
+        for question in page.get("questions") or []:
+            continuation = question.get("continuation")
+            target = None
+            if isinstance(continuation, dict):
+                file_sha = page.get("_file_sha") or page.get("file_sha256")
+                key = (
+                    file_sha,
+                    continuation.get("target_page"),
+                    continuation.get("target_question_index"),
+                )
+                target_uid = continuation_targets.get(key) if file_sha else None
+                target = question_targets.get(target_uid) if target_uid else None
+            if target is not None:
+                _merge_paper_continuation(target, question)
+                question_targets[question["_source_uid"]] = target
+                continue
+            current = _new_paper_occurrence(question)
+            if continuation:
+                current["needs_review"] = True
+            questions.append(current)
+            question_targets[question["_source_uid"]] = current
+
+    unmatched: list[tuple[dict, list[dict]]] = []
+    for page in pages:
+        for answer in page.get("answer_occurrences") or []:
+            explicit_target = bool(answer.get("_question_uid"))
+            target = question_targets.get(answer.get("_question_uid"))
+            candidates = [target] if target is not None else []
+            if not candidates and not explicit_target and answer.get("_global"):
+                key = store.normalize_number_key(answer["_global"])
+                candidates = [q for q in questions if store.normalize_number_key(q["number"]) == key]
+            if not candidates and not explicit_target and not answer.get("_global"):
+                key = store.normalize_number_key(answer.get("_original_number"))
+                candidates = [q for q in questions if key in q["_original_numbers"]]
+                section = answer.get("section")
+                section_key = store.normalize_number_key(section)
+                if (section and candidates and section_key not in
+                        {"参考答案", "答案", "answer key", "answer_key", "answers", "answer"}):
+                    candidates = [
+                        q for q in candidates if any(
+                            store.normalize_number_key(source.get("section")) == section_key
+                            for source in q["source_occurrences"]
+                        )
+                    ]
+            if len(candidates) == 1:
+                candidates[0]["_answer_values"].append(str(answer.get("answer") or "").strip())
+            else:
+                if candidates:
+                    for candidate in candidates:
+                        candidate["_answer_conflict"] = True
+                        candidate["needs_review"] = True
+                elif explicit_target or answer.get("_global"):
+                    original_key = store.normalize_number_key(answer.get("_original_number"))
+                    for candidate in questions:
+                        if original_key in candidate["_original_numbers"]:
+                            candidate["needs_review"] = True
+                unmatched.append((answer, candidates))
+
+    for question in questions:
+        values = {
+            unicodedata.normalize("NFKC", value).strip().casefold(): value
+            for value in question.pop("_answer_values") if value
+        }
+        if len(values) == 1 and not question.pop("_answer_conflict"):
+            question["correct_answer"] = next(iter(values.values()))
+        else:
+            question.pop("_answer_conflict", None)
+            if values or question.get("_answer_conflict"):
+                question["needs_review"] = True
+            question["correct_answer"] = None
+        question.pop("_source_uid", None)
+        question.pop("_original_numbers", None)
+
+    legacy_stubs: dict[str, list[dict]] = {}
+    for answer, candidates in unmatched:
+        if candidates:
+            continue
+        if answer.get("_legacy"):
+            legacy_stubs.setdefault(store.normalize_number_key(answer.get("_original_number")), []).append(answer)
+        else:
+            questions.append(_answer_stub(answer, legacy=False))
+    for group in legacy_stubs.values():
+        values = {item["answer"] for item in group}
+        if len(values) == 1 and next(iter(values)).rstrip("。.") == "略":
+            continue
+        stub = _answer_stub(group[0], legacy=True)
+        stub["source_occurrences"] = [item_source for item in group for item_source in [{
+            "file_sha256": item.get("file_sha256"), "page": item.get("page"),
+            "local_number": item.get("_original_number"), "section": item.get("section"),
+            "kind": "answer", "observed_answer": item.get("answer"),
+        }]]
+        stub["aliases"] = sorted({item["_source_key"] for item in group if item.get("_source_key")})
+        if len(values) > 1:
+            stub["correct_answer"] = None
+            stub["needs_review"] = True
+        questions.append(stub)
+    questions.sort(key=lambda q: _num_key(q.get("number")))
     return questions
 
 
@@ -238,42 +417,54 @@ def _ensure_unique_numbers(pages: list[dict]) -> None:
 
 
 def _renumber_pages(pages: list[dict]) -> None:
-    """按每道题的 occurrence ID 归一化题号，避免同页同号互相覆盖。"""
+    """同时重编号题目 occurrence，并把答案 occurrence 映射到目标题。"""
+    _prepare_source_occurrences(pages)
     compact: list[dict] = []
-    for p in pages:
-        for q in p.get("questions") or []:
-            num = str(q.get("number") or "").strip()
-            if not num:
+    answers: list[dict] = []
+    for page in pages:
+        for question in page.get("questions") or []:
+            number = str(question.get("number") or "").strip()
+            if not number:
                 continue
-            uid = f"p{p.get('page', 0)}-q{len(compact) + 1}"
-            q["_renumber_uid"] = uid
             compact.append({
-                "uid": uid, "page": p.get("page"), "number": num,
-                "section": q.get("section"), "type": q.get("type"),
-                "stem": (q.get("stem") or "")[:120],
+                "uid": question["_source_uid"], "page": question["_source_occurrence"]["page"],
+                "number": number, "section": question.get("section"),
+                "type": question.get("type"), "stem": (question.get("stem") or "")[:120],
+            })
+        for answer in page.get("answer_occurrences") or []:
+            answers.append({
+                "uid": answer["_answer_uid"], "section": answer.get("section"),
+                "local_number": answer.get("_original_number"), "page": answer.get("page"),
+                "answer": str(answer.get("answer") or "")[:40],
             })
     if not compact:
         return
-    answer_key: dict[str, str] = {}
-    for p in pages:
-        for k, v in (p.get("answer_key") or {}).items():
-            answer_key[str(k).strip()] = str(v)[:40]
     data = llm.deepseek_json(
-        prompts.RENUMBER_SYSTEM, prompts.renumber_user(compact, answer_key),
-        max_tokens=16000,
+        prompts.RENUMBER_SYSTEM, prompts.renumber_user(compact, answers), max_tokens=16000,
     )
     mapping = {
-        str(m.get("uid")): str(m.get("global")).strip()
-        for m in data.get("mapping") or []
-        if m.get("uid") and m.get("global") is not None and str(m.get("global")).strip()
+        str(item.get("uid")): str(item.get("global")).strip()
+        for item in data.get("mapping") or []
+        if item.get("uid") and item.get("global") is not None and str(item.get("global")).strip()
     }
-    for p in pages:
-        for q in p.get("questions") or []:
-            uid = q.pop("_renumber_uid", None)
-            if uid and mapping.get(uid):
-                q["number"] = mapping[uid]
-            else:
-                q.pop("_renumber_uid", None)
+    answer_mapping = {
+        str(item.get("uid")): item
+        for item in data.get("answer_mapping") or []
+        if isinstance(item, dict) and item.get("uid")
+    }
+    for page in pages:
+        for question in page.get("questions") or []:
+            number = mapping.get(question["_source_uid"])
+            if number:
+                question["number"] = number
+        for answer in page.get("answer_occurrences") or []:
+            item = answer_mapping.get(answer["_answer_uid"]) or {}
+            question_uid = str(item.get("question_uid") or "").strip()
+            global_number = str(item.get("global") or "").strip()
+            if question_uid:
+                answer["_question_uid"] = question_uid
+            if global_number:
+                answer["_global"] = global_number
 
 
 def _answer_text(value) -> str:
@@ -601,13 +792,17 @@ def _render_files(owner_dir, files: list[dict], path_of) -> list[tuple[dict, int
 
 # 视觉缓存按 (sha, mode) 加进程内锁：两个 worker 处理含相同文件的不同提交时，
 # 串行化读-判-算-写，既防并发写坏缓存，也省双倍 LLM 费用
-_cache_locks: dict[str, threading.Lock] = {}
+_cache_locks: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 _cache_locks_guard = threading.Lock()
 
 
 def _cache_lock_for(key: str) -> threading.Lock:
     with _cache_locks_guard:
-        return _cache_locks.setdefault(key, threading.Lock())
+        lock = _cache_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _cache_locks[key] = lock
+        return lock
 
 
 def _is_blank_entry(p: dict) -> bool:
@@ -629,9 +824,10 @@ def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
                 cached = None
             if isinstance(cached, list):
                 duplicates: set[int] = set()
-                for p in cached:
-                    if not isinstance(p, dict) or type(p.get("page")) is not int:
+                for raw_page in cached:
+                    if not isinstance(raw_page, dict) or type(raw_page.get("page")) is not int:
                         continue
+                    p = _normalize_full_page(raw_page) if mode == "full" else raw_page
                     page = p["page"]
                     if page not in expected:
                         continue
@@ -674,12 +870,105 @@ def _vision_file_pages(pages_dir, start: int, n: int, sha256: str | None,
         for li in expected - set(by_idx):
             by_idx[li] = {
                 "page": li, "error": "视觉识别未返回该页结果", "raw_text": "",
-                "questions": [], "answer_key": {}, "answers": [],
+                "questions": [], "answer_occurrences": [], "answers": [],
             }
         results = [by_idx[i] for i in range(1, n + 1)]
+        if mode == "full":
+            normalized_results = []
+            for result in results:
+                normalized = _normalize_full_page(result)
+                normalized.pop("answer_key", None)
+                normalized_results.append(normalized)
+            results = normalized_results
         if cache:
             store.write_json_atomic(cache, [p for p in results if not p.get("error")])
         return results
+
+
+def _identity_aliases(question: dict) -> set[str]:
+    aliases = {str(alias) for alias in (question.get("aliases") or []) if alias}
+    if question.get("source_key"):
+        aliases.add(question["source_key"])
+    return aliases
+
+
+def _legacy_identity_match(question: dict, previous: dict) -> bool:
+    if previous.get("source_key") or previous.get("manual_created"):
+        return False
+    legacy_qid = "q" + str(question.get("number") or "")
+    return previous["id"] == legacy_qid or legacy_qid in (previous.get("aliases") or [])
+
+
+def _reconcile_paper_identity(paper_id: str, questions: list[dict]) -> list[dict]:
+    previous = store.get_paper_questions(paper_id)
+    tombstones = store.list_paper_question_tombstones(paper_id, full=True)
+    used: set[str] = set()
+    reconciled: list[dict] = []
+    for question in questions:
+        aliases = _identity_aliases(question)
+        tomb_matches = [
+            item for item in tombstones
+            if aliases & _identity_aliases({"source_key": item.get("source_key"),
+                                           "aliases": item.get("aliases")})
+        ]
+        if not tomb_matches:
+            tomb_matches = [
+                item for item in tombstones if _legacy_identity_match(question, {
+                    "id": item["qid"], "source_key": item.get("source_key"),
+                    "aliases": item.get("aliases"), "manual_created": False,
+                })
+            ]
+        if len(tomb_matches) == 1:
+            continue
+        if len(tomb_matches) > 1:
+            question["needs_review"] = True
+            reconciled.append(question)
+            continue
+
+        matches = [
+            old for old in previous if old["id"] not in used
+            and aliases & _identity_aliases(old)
+        ]
+        if not matches:
+            matches = [
+                old for old in previous if old["id"] not in used
+                and _legacy_identity_match(question, old)
+            ]
+        if len(matches) > 1:
+            question["needs_review"] = True
+            reconciled.append(question)
+            continue
+        if matches:
+            old = matches[0]
+            used.add(old["id"])
+            question["id"] = old["id"]
+            question["aliases"] = sorted(
+                _identity_aliases(question) | _identity_aliases(old)
+            )
+            if old.get("edited"):
+                question["correct_answer"] = old.get("correct_answer")
+                question["edited"] = True
+            elif not question.get("needs_review") and not question.get("correct_answer"):
+                question["correct_answer"] = old.get("correct_answer")
+            if old.get("content_edited"):
+                for field in ("number", "section", "type", "stem", "options", "passage"):
+                    question[field] = old.get(field)
+                question["content_edited"] = True
+            if old.get("knowledge_point"):
+                question["knowledge_point"] = old["knowledge_point"]
+        reconciled.append(question)
+
+    recognized = {q["id"] for q in reconciled}
+    for old in previous:
+        if old["id"] in used or old["id"] in recognized:
+            continue
+        if old.get("manual_created"):
+            reconciled.append(old)
+        elif not old.get("source_key"):
+            old["needs_review"] = True
+            reconciled.append(old)
+    reconciled.sort(key=lambda q: _num_key(q.get("number")))
+    return reconciled
 
 
 def _set_paper_progress(paper_id: str, stage: str, done: int, total: int, label: str) -> None:
@@ -710,7 +999,7 @@ def process_paper(paper_id: str) -> None:
 
             def blank(li: int) -> dict:
                 return {"page": li, "page_role": ["blank"], "raw_text": "",
-                        "questions": [], "answer_key": {}}
+                        "questions": [], "answer_occurrences": [], "answers": []}
 
             for f, start, n in plans:
                 def prog(done: int, total: int) -> None:
@@ -721,15 +1010,17 @@ def process_paper(paper_id: str) -> None:
                     lambda payload: llm.vision_extract_pages(payload, on_progress=prog), blank,
                 )
                 done_pages += n
-                for p in results:
-                    gp = dict(p)
-                    gp["page"] = start + p["page"]
+                for result in results:
+                    gp = _normalize_full_page(result)
+                    gp.pop("answer_key", None)
+                    gp["page"] = start + result["page"]
+                    gp["_file_sha"] = f.get("sha256")
+                    gp["_file_page"] = result["page"]
                     all_pages.append(gp)
             all_pages.sort(key=lambda p: p["page"])
             failed_pages = [p["page"] for p in all_pages if p.get("error")]
 
             _set_paper_progress(paper_id, "consolidate", 0, 1, "正在汇总题目与标准答案…")
-            _mark_number_conflicts(all_pages)
             if not _global_numbering_ok(all_pages):
                 try:
                     _renumber_pages(all_pages)
@@ -737,41 +1028,7 @@ def process_paper(paper_id: str) -> None:
                     pass
             _ensure_unique_numbers(all_pages)
             store.write_json_atomic(pd / "pages_raw.json", all_pages, indent=2)
-            questions = build_paper_questions(all_pages)
-            review_numbers = {
-                q.get("number") for p in all_pages for q in (p.get("questions") or [])
-                if q.get("needs_review")
-            }
-            for q in questions:
-                if q.get("number") in review_numbers:
-                    q["needs_review"] = True
-
-            old = {q["id"]: q for q in store.get_paper_questions(paper_id)}
-            tombstones = {item["qid"] for item in store.list_paper_question_tombstones(paper_id)}
-            questions = [q for q in questions if q["id"] not in tombstones]
-            for q in questions:
-                previous = old.get(q["id"])
-                if not previous:
-                    continue
-                if previous.get("edited"):
-                    if not q.get("needs_review"):
-                        q["correct_answer"] = previous.get("correct_answer")
-                    q["edited"] = True
-                elif (not q.get("needs_review") and not q.get("correct_answer")
-                      and previous.get("correct_answer")):
-                    q["correct_answer"] = previous["correct_answer"]
-                if previous.get("content_edited"):
-                    for field in ("number", "section", "type", "stem", "options", "passage"):
-                        q[field] = previous.get(field)
-                    q["content_edited"] = True
-                if previous.get("knowledge_point"):
-                    q["knowledge_point"] = previous["knowledge_point"]
-            recognized = {q["id"] for q in questions}
-            questions.extend(
-                q for qid, q in old.items()
-                if q.get("manual_created") and qid not in recognized and qid not in tombstones
-            )
-            questions.sort(key=lambda q: _num_key(q["number"]))
+            questions = _reconcile_paper_identity(paper_id, build_paper_questions(all_pages))
 
             meta = build_meta(all_pages, questions, files[0].get("filename") or "")
             numbering_review = any(q.get("needs_review") for q in questions)
@@ -783,10 +1040,9 @@ def process_paper(paper_id: str) -> None:
             store.replace_paper_questions(paper_id, questions)
             if questions and not failed_pages:
                 try:
-                    complete_knowledge_points(paper_id)
+                    complete_knowledge_points(paper_id, sync=False)
                 except Exception:  # noqa: BLE001
                     meta["knowledge_warning"] = "部分知识点暂未自动补全，可稍后重试"
-            regrade_paper_submissions(paper_id)
             partial = bool(failed_pages or numbering_review or not questions)
             if not questions:
                 error = "没有可用题目，请重试识别或手动补题"
@@ -804,6 +1060,9 @@ def process_paper(paper_id: str) -> None:
             if not paper.get("title"):
                 fields["title"] = meta.get("title")
             store.update_paper(paper_id, **fields)
+            paper_revision = store.get_paper(paper_id)["revision"]
+            store.write_json_atomic(pd / "source_meta.json", {"paper_revision": paper_revision})
+            regrade_paper_submissions(paper_id, force=True)
             events.publish(paper_id, "paper_done", {"status": fields["status"]})
         except Exception as exc:  # noqa: BLE001
             store.update_paper(paper_id, status="error", error=f"{type(exc).__name__}: {exc}")
@@ -811,72 +1070,152 @@ def process_paper(paper_id: str) -> None:
             raise
 
 
-def regrade_paper_submissions(paper_id: str) -> int:
-    """把当前试卷内容同步到非在途提交；在途提交在最终判分锁内会重读。"""
-    paper_question_list = store.get_paper_questions(paper_id)
-    paper_questions = {q["id"]: q for q in paper_question_list}
+def _normalized_observations(answers: dict[str, str]) -> dict[str, str | None]:
+    normalized: dict[str, str | None] = {}
+    for number, answer in answers.items():
+        key = store.normalize_number_key(number)
+        if not key:
+            continue
+        if key in normalized and _answer_text(normalized[key]) != _answer_text(answer):
+            normalized[key] = None
+        else:
+            normalized[key] = answer
+    return normalized
+
+
+def _assemble_submission_questions(paper_questions: list[dict], old_questions: list[dict],
+                                   answers: dict[str, str] | None) -> list[dict]:
+    old = {q["id"]: q for q in old_questions}
+    observations = _normalized_observations(answers) if answers is not None else None
     number_counts = Counter(
-        store.normalize_number_key(q.get("number")) for q in paper_question_list
-        if store.normalize_number_key(q.get("number"))
+        store.normalize_number_key(pq.get("number")) for pq in paper_questions
+        if store.normalize_number_key(pq.get("number"))
     )
+    questions = []
+    for pq in paper_questions:
+        key = store.normalize_number_key(pq.get("number"))
+        previous = old.get(pq["id"])
+        overridden = bool(previous and previous.get("overridden"))
+        ambiguous = bool(key) and number_counts[key] > 1
+        if overridden:
+            student_answer = previous.get("student_answer")
+        elif observations is not None:
+            student_answer = observations.get(key)
+        else:
+            student_answer = previous.get("student_answer") if previous else None
+        if ambiguous and not overridden:
+            student_answer = None
+        question = {
+            "id": pq["id"], "number": pq["number"], "section": pq.get("section"),
+            "type": pq.get("type"), "stem": pq.get("stem"),
+            "options": pq.get("options"), "passage": pq.get("passage"),
+            "student_answer": student_answer,
+            "correct_answer": pq.get("correct_answer") if overridden or not ambiguous else None,
+            "knowledge_point": pq.get("knowledge_point"), "status": "unknown",
+            "needs_review": bool(pq.get("needs_review") or ambiguous),
+        }
+        if overridden:
+            question["status"] = previous["status"]
+            question["overridden"] = True
+        elif ambiguous:
+            question["status"] = "unknown"
+        else:
+            _grade_one(question)
+        questions.append(question)
+    return questions
+
+
+def _paper_source_quality(paper: dict, paper_questions: list[dict]) -> dict:
+    meta = paper.get("meta") or {}
+    accepted = bool(meta.get("accepted_partial"))
+    needs_review = bool(
+        meta.get("numbering_needs_review") or any(q.get("needs_review") for q in paper_questions)
+    )
+    failed = list(meta.get("failed_pages") or [])
+    return {
+        "accepted_partial": accepted, "needs_review": needs_review, "failed_pages": failed,
+        "partial": bool(paper["status"] == "partial" or accepted or needs_review or failed),
+    }
+
+
+def _submission_snapshot(job: dict, paper: dict, paper_questions: list[dict],
+                         questions: list[dict], base_meta: dict | None = None) -> tuple[dict, str, str | None]:
+    meta = dict(base_meta if base_meta is not None else (job.get("meta") or {}))
+    quality = dict(meta.get("quality") or {})
+    unmatched = list(quality.get("unmatched_answers") or [])
+    failed = list(meta.get("failed_pages") or [])
+    accepted = bool(meta.get("accepted_partial"))
+    source = _paper_source_quality(paper, paper_questions)
+    meta.update({
+        "total_questions": len(questions),
+        "source_accepted_partial": source["accepted_partial"],
+        "source_needs_review": source["needs_review"],
+        "source_failed_pages": source["failed_pages"],
+        "quality": quality,
+    })
+    errors = []
+    if failed and not accepted:
+        errors.append(f"第 {', '.join(map(str, failed))} 页识别失败")
+    if source["needs_review"]:
+        errors.append("来源试卷仍有题目需要核对")
+    if source["accepted_partial"]:
+        errors.append("来源试卷为已接受的部分识别结果")
+    elif source["failed_pages"]:
+        errors.append("来源试卷存在识别失败页")
+    if unmatched and not accepted:
+        errors.append("存在未匹配的学生作答")
+    partial = bool(source["partial"] or ((failed or unmatched) and not accepted))
+    return meta, "partial" if partial else "done", "；".join(errors) or None
+
+
+def regrade_paper_submissions(paper_id: str, *, force: bool = False) -> int:
+    """按稳定 qid 全集 reconcile；每个提交独立在一个 DB 事务内落盘。"""
     changed_submissions = 0
     with store.paper_lock(paper_id):
+        paper = store.get_paper(paper_id)
+        if not paper:
+            return 0
+        paper_questions = store.get_paper_questions(paper_id)
         for job_id in store.list_submission_ids_for_paper(paper_id):
             with store.job_lock(job_id):
                 job = store.get_job(job_id)
                 if not job or job["status"] == "processing":
                     continue
-                changed = False
-                explain_targets = []
-                for q in store.get_questions(job_id):
-                    pq = paper_questions.get(q["id"])
-                    if not pq:
-                        continue
-                    fields = {
-                        key: pq.get(key) for key in
-                        ("number", "section", "type", "stem", "options", "passage",
-                         "correct_answer", "knowledge_point", "needs_review")
-                        if q.get(key) != pq.get(key)
-                    }
-                    candidate = dict(q)
-                    candidate.update(fields)
-                    ambiguous = number_counts[store.normalize_number_key(pq.get("number"))] > 1
-                    if ambiguous:
-                        candidate["needs_review"] = True
-                        fields["needs_review"] = True
-                        if not q.get("overridden"):
-                            candidate["student_answer"] = None
-                            candidate["correct_answer"] = None
-                            candidate["status"] = "unknown"
-                            fields.update(student_answer=None, correct_answer=None, status="unknown")
-                    if not q.get("overridden") and not ambiguous:
-                        regrade([candidate])
-                        if candidate["status"] != q["status"]:
-                            fields["status"] = candidate["status"]
-                    if not fields:
-                        continue
-                    store.update_question(job_id, q["id"], **fields)
-                    changed = True
-                    updated = store.get_question(job_id, q["id"])
-                    if updated["status"] in ("wrong", "unknown"):
-                        explain_targets.append(q["id"])
-                if changed:
-                    store.refresh_stats(job_id)
-                    changed_submissions += 1
-                    if explain_targets:
-                        from . import workers
-                        workers.enqueue_explanations(job_id, explain_targets, priority=1)
-                    events.publish(job_id, "job_done", {"status": job["status"], "regraded": True})
+                if not force and job.get("applied_paper_revision") == paper["revision"]:
+                    continue
+                old_questions = store.get_questions(job_id)
+                questions = _assemble_submission_questions(paper_questions, old_questions, None)
+                meta, status, error = _submission_snapshot(job, paper, paper_questions, questions)
+                with transaction():
+                    store.replace_questions(job_id, questions)
+                    stats = store.refresh_stats(job_id)
+                    store.update_job(
+                        job_id, status=status, meta=meta, error=error,
+                        applied_paper_revision=paper["revision"],
+                    )
+                changed_submissions += 1
+                explain_targets = [
+                    q["id"] for q in store.get_questions(job_id)
+                    if q["status"] in ("wrong", "unknown") and not q.get("explanation")
+                ]
+                if explain_targets:
+                    from . import workers
+                    workers.enqueue_explanations(job_id, explain_targets, priority=1)
+                events.publish(job_id, "job_done", {
+                    "status": status, "regraded": True, "stats": stats,
+                    "applied_paper_revision": paper["revision"],
+                })
     return changed_submissions
 
 
-def complete_knowledge_points(paper_id: str, overwrite: bool = False) -> int:
+def complete_knowledge_points(paper_id: str, overwrite: bool = False, *,
+                              sync: bool = True) -> int:
     paper = store.get_paper(paper_id) or {}
     questions = [
         q for q in store.get_paper_questions(paper_id)
         if (overwrite or not q.get("knowledge_point")) and (q.get("stem") or q.get("options"))
     ]
-    updated = 0
+    pending: dict[str, str] = {}
     for start in range(0, len(questions), 20):
         batch = questions[start:start + 20]
         result = llm.deepseek_json(
@@ -887,12 +1226,11 @@ def complete_knowledge_points(paper_id: str, overwrite: bool = False) -> int:
         for q in batch:
             value = mapping.get(q["id"])
             if value and str(value).strip():
-                store.update_paper_question(
-                    paper_id, q["id"], knowledge_point=str(value).strip()[:200],
-                    mark_content_edited=False,
-                )
-                updated += 1
-    if updated:
+                pending[q["id"]] = str(value).strip()[:200]
+    updated = store.update_paper_knowledge_points(
+        paper_id, pending, mark_content_edited=False,
+    ) if pending else 0
+    if updated and sync:
         regrade_paper_submissions(paper_id)
     return updated
 
@@ -904,39 +1242,11 @@ def complete_knowledge_points(paper_id: str, overwrite: bool = False) -> int:
 def grade_submission_questions(paper_questions: list[dict],
                                answers: dict[str, str]) -> list[dict]:
     """用试卷题目 + 学生答案组装提交；重号 occurrence 不共享作答或答案。"""
-    normalized_answers: dict[str, str | None] = {}
-    for number, answer in answers.items():
-        key = store.normalize_number_key(number)
-        if not key:
-            continue
-        if (key in normalized_answers
-                and _answer_text(normalized_answers[key]) != _answer_text(answer)):
-            normalized_answers[key] = None
-        else:
-            normalized_answers[key] = answer
-    number_counts = Counter(
-        store.normalize_number_key(pq.get("number")) for pq in paper_questions
-        if store.normalize_number_key(pq.get("number"))
-    )
-    questions = []
-    for pq in paper_questions:
-        key = store.normalize_number_key(pq.get("number"))
-        ambiguous = bool(key) and number_counts[key] > 1
-        question = {
-            "id": pq["id"], "number": pq["number"], "section": pq.get("section"),
-            "type": pq.get("type"), "stem": pq.get("stem"),
-            "options": pq.get("options"), "passage": pq.get("passage"),
-            "student_answer": None if ambiguous else normalized_answers.get(key),
-            "correct_answer": None if ambiguous else pq.get("correct_answer"),
-            "knowledge_point": pq.get("knowledge_point"), "status": "unknown",
-            "needs_review": bool(pq.get("needs_review") or ambiguous),
-        }
-        questions.append(question)
-    _grade_all(questions)
-    for q in questions:
-        if number_counts[store.normalize_number_key(q.get("number"))] > 1:
-            q["status"] = "unknown"
-    return questions
+    return _assemble_submission_questions(paper_questions, [], answers)
+
+
+def _answer_cache_mode(paper_id: str, revision: int) -> str:
+    return f"ans-{paper_id}-r{revision}"
 
 
 def process_submission(job_id: str) -> None:
@@ -945,9 +1255,14 @@ def process_submission(job_id: str) -> None:
         return
     jd = store.job_dir(job_id)
     try:
+        paper = store.get_paper(job["paper_id"])
+        if not paper:
+            raise RuntimeError("试卷不存在")
+        paper_revision = paper["revision"]
         paper_qs = store.get_paper_questions(job["paper_id"])
         if not paper_qs:
             raise RuntimeError("试卷尚未识别完成，请稍后重试")
+        store.update_job(job_id, paper_revision=paper_revision)
         files = store.job_files(job_id)
         if not files:
             raise RuntimeError("提交没有任何文件")
@@ -958,16 +1273,18 @@ def process_submission(job_id: str) -> None:
         store.update_job(job_id, page_count=page_count)
 
         ctx = prompts.paper_context_summary(paper_qs)
-        answers: dict[str, tuple[str, int]] = {}  # 题号 -> (答案, 置信度)
+        answers: dict[str, tuple[str, int]] = {}
+        answer_pages: dict[str, int | None] = {}
+        quality_notes: list[dict] = []
 
-        def put(num, ans, conf) -> None:
+        def put(num, ans, conf, page: int | None = None) -> None:
             n, a = store.normalize_number_key(num), str(ans or "").strip()
             if not n or not a:
                 return
-            # 未给置信度按 medium 算；显式 low（涂改/模糊）后面不直接判对错
-            c = _CONF.get(str(conf or "").lower(), 2)
-            if n not in answers or c > answers[n][1]:
-                answers[n] = (a, c)
+            confidence = _CONF.get(str(conf or "").lower(), 2)
+            if n not in answers or confidence > answers[n][1]:
+                answers[n] = (a, confidence)
+                answer_pages[n] = page
 
         _set_progress(job_id, "vision", 0, page_count, "正在识别学生作答…")
         done_pages = 0
@@ -980,9 +1297,21 @@ def process_submission(job_id: str) -> None:
             pf.get("sha256"): pf for pf in store.list_paper_files(job["paper_id"])
             if pf.get("sha256")
         }
+        source_meta_path = store.paper_dir(job["paper_id"]) / "source_meta.json"
+        try:
+            source_meta = (json.loads(source_meta_path.read_text(encoding="utf-8"))
+                           if source_meta_path.exists() else {})
+            source_revision = source_meta.get("paper_revision") or 1
+        except (OSError, json.JSONDecodeError):
+            source_revision = None
         paper_raw_path = store.paper_dir(job["paper_id"]) / "pages_raw.json"
-        paper_raw = (json.loads(paper_raw_path.read_text(encoding="utf-8"))
-                     if paper_raw_path.exists() else None)
+        try:
+            paper_raw = (
+                json.loads(paper_raw_path.read_text(encoding="utf-8"))
+                if paper_raw_path.exists() and source_revision == paper_revision else None
+            )
+        except (OSError, json.JSONDecodeError):
+            paper_raw = None
 
         for f, start, n in plans:
             sha = f.get("sha256")
@@ -998,15 +1327,30 @@ def process_submission(job_id: str) -> None:
                     if p is None or p.get("error"):
                         failed_pages.add(start + li)
                         continue
+                    if p.get("notes"):
+                        quality_notes.append({"page": start + li, "notes": str(p["notes"])})
                     for q in p.get("questions") or []:
                         put(q.get("number"), q.get("student_marked"),
-                            q.get("student_marked_confidence"))
+                            q.get("student_marked_confidence"), start + li)
             else:
                 def prog(done: int, total: int) -> None:
                     _set_progress(job_id, "vision", done_pages + done, page_count,
                                   f"正在识别第 {done_pages + done}/{page_count} 页…")
+                if sha and paper_revision == 1:
+                    legacy_cache = store.vision_cache_path(sha, f"ans-{job['paper_id']}")
+                    revision_cache = store.vision_cache_path(
+                        sha, _answer_cache_mode(job["paper_id"], paper_revision),
+                    )
+                    if legacy_cache.exists() and not revision_cache.exists():
+                        try:
+                            legacy_data = json.loads(legacy_cache.read_text(encoding="utf-8"))
+                            if isinstance(legacy_data, list):
+                                store.write_json_atomic(revision_cache, legacy_data)
+                        except (OSError, json.JSONDecodeError):
+                            pass
                 results = _vision_file_pages(
-                    jd / "pages", start, n, sha, f"ans-{job['paper_id']}",
+                    jd / "pages", start, n, sha,
+                    _answer_cache_mode(job["paper_id"], paper_revision),
                     lambda payload: llm.vision_extract_pages(
                         payload, on_progress=prog,
                         system=prompts.SUBMISSION_VISION_SYSTEM,
@@ -1018,44 +1362,62 @@ def process_submission(job_id: str) -> None:
                     if p.get("error"):
                         failed_pages.add(start + p["page"])
                         continue
+                    if p.get("notes"):
+                        quality_notes.append({"page": start + p["page"], "notes": str(p["notes"])})
                     for a in p.get("answers") or []:
-                        put(a.get("number"), a.get("answer"), a.get("confidence"))
+                        put(a.get("number"), a.get("answer"), a.get("confidence"), start + p["page"])
             done_pages += n
 
         _set_progress(job_id, "consolidate", 0, 1, "正在对照标准答案判分…")
         with store.paper_lock(job["paper_id"]), store.job_lock(job_id):
             paper = store.get_paper(job["paper_id"])
-            if not paper or paper["status"] != "ready":
+            if not paper:
+                raise RuntimeError("试卷不存在")
+            if paper["revision"] != paper_revision:
+                raise RuntimeError("试卷结构版本已变化，请重试本次提交")
+            if paper["status"] != "ready":
                 raise RuntimeError("试卷尚未确认完整，请先处理失败页或明确接受部分结果")
             paper_qs = store.get_paper_questions(job["paper_id"])
             if not paper_qs:
                 raise RuntimeError("试卷没有题目，无法判分")
-            questions = grade_submission_questions(paper_qs, {k: v[0] for k, v in answers.items()})
-            low_nums = {k for k, v in answers.items() if v[1] <= _CONF["low"]}
-            for q in questions:
-                if (store.normalize_number_key(q["number"]) in low_nums
-                        and q["status"] in ("correct", "wrong")):
-                    q["status"] = "unknown"
-
-            _preserve_overrides(job_id, questions)
-
-            failed = sorted(failed_pages)
-            meta = {
-                "title": job.get("paper_title") or "试卷",
-                "total_questions": len(questions), "failed_pages": failed,
-                "accepted_partial": False,
-            }
-            status = "partial" if failed else "done"
-            error = f"第 {', '.join(map(str, failed))} 页识别失败；当前结果未完整，请重试或接受" if failed else None
-            store.replace_questions(job_id, questions)
-            store.update_job(
-                job_id, status=status, stage="done", meta=meta, error=error,
-                title=job.get("paper_title"), stats=_stats(questions),
-                progress_done=1, progress_total=1,
-                progress_label="部分完成" if failed else "完成",
+            old_questions = store.get_questions(job_id)
+            questions = _assemble_submission_questions(
+                paper_qs, old_questions, {k: v[0] for k, v in answers.items()},
             )
-            events.publish(job_id, "job_done", {"status": status})
-            if not failed:
+            low_nums = {k for k, v in answers.items() if v[1] <= _CONF["low"]}
+            for question in questions:
+                if (store.normalize_number_key(question["number"]) in low_nums
+                        and question["status"] in ("correct", "wrong")):
+                    question["status"] = "unknown"
+
+            number_counts = Counter(
+                store.normalize_number_key(q.get("number")) for q in paper_qs
+                if store.normalize_number_key(q.get("number"))
+            )
+            unmatched = [{
+                "number": number, "answer": answer,
+                "confidence": confidence, "page": answer_pages.get(number),
+            } for number, (answer, confidence) in answers.items()
+                if number_counts[number] != 1]
+            base_meta = {
+                "title": job.get("paper_title") or "试卷",
+                "failed_pages": sorted(failed_pages), "accepted_partial": False,
+                "quality": {"unmatched_answers": unmatched, "notes": quality_notes},
+            }
+            meta, status, error = _submission_snapshot(
+                job, paper, paper_qs, questions, base_meta,
+            )
+            with transaction():
+                store.replace_questions(job_id, questions)
+                stats = store.refresh_stats(job_id)
+                store.update_job(
+                    job_id, status=status, stage="done", meta=meta, error=error,
+                    title=job.get("paper_title"), applied_paper_revision=paper_revision,
+                    progress_done=1, progress_total=1,
+                    progress_label="部分完成" if status == "partial" else "完成",
+                )
+            events.publish(job_id, "job_done", {"status": status, "stats": stats})
+            if status == "done":
                 from . import workers
                 targets = [q["id"] for q in questions if q.get("status") in ("wrong", "unknown")]
                 if targets:

@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import unicodedata
+import uuid
 
 from .config import DATA_DIR
 
@@ -333,7 +335,94 @@ def _v10(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9, _v10]
+def _v11(conn: sqlite3.Connection) -> None:
+    """paper 来源身份与结构版本；关联数据随旧 qid 映射原子迁移。"""
+    _add_column_if_missing(conn, "papers", "revision", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "jobs", "paper_revision", "INTEGER")
+    _add_column_if_missing(conn, "jobs", "applied_paper_revision", "INTEGER")
+    for column in ("source_key", "source_json", "alias_json"):
+        _add_column_if_missing(conn, "paper_questions", column, "TEXT")
+    for column in ("source_key", "alias_json"):
+        _add_column_if_missing(conn, "paper_question_tombstones", column, "TEXT")
+    conn.execute("DROP INDEX IF EXISTS idx_paper_questions_source_key")
+    conn.execute("UPDATE papers SET revision = 1 WHERE revision = 0")
+
+    paper_ids = [row[0] for row in conn.execute("SELECT id FROM papers").fetchall()]
+    for paper_id in paper_ids:
+        current = conn.execute(
+            "SELECT qid, number, manual_created, source_json, alias_json "
+            "FROM paper_questions WHERE paper_id = ? ORDER BY id", (paper_id,),
+        ).fetchall()
+        tombstones = conn.execute(
+            "SELECT qid, number, alias_json FROM paper_question_tombstones WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchall()
+        mapping: dict[str, str] = {}
+        for qid, _number, manual_created, _source, _aliases in current:
+            mapping[qid] = (
+                qid if manual_created or qid.startswith("q_") else "q_" + uuid.uuid4().hex
+            )
+        for qid, _number, _aliases in tombstones:
+            if qid not in mapping:
+                mapping[qid] = qid if qid.startswith(("manual-", "q_")) else "q_" + uuid.uuid4().hex
+
+        for qid, number, _manual, source_json, alias_json in current:
+            old_qid = qid
+            aliases = set(json.loads(alias_json) if alias_json else [])
+            aliases.update((old_qid, mapping[old_qid]))
+            source = source_json or json.dumps(
+                {"occurrences": [], "legacy": {"qid": old_qid, "number": number}},
+                ensure_ascii=False,
+            )
+            conn.execute(
+                "UPDATE paper_questions SET qid = ?, source_json = ?, alias_json = ? "
+                "WHERE paper_id = ? AND qid = ?",
+                (mapping[old_qid], source,
+                 json.dumps(sorted(aliases), ensure_ascii=False), paper_id, old_qid),
+            )
+        for qid, _number, alias_json in tombstones:
+            aliases = set(json.loads(alias_json) if alias_json else [])
+            aliases.update((qid, mapping[qid]))
+            conn.execute(
+                "UPDATE paper_question_tombstones SET qid = ?, alias_json = ? "
+                "WHERE paper_id = ? AND qid = ?",
+                (mapping[qid], json.dumps(sorted(aliases), ensure_ascii=False), paper_id, qid),
+            )
+
+        for old_qid, new_qid in mapping.items():
+            if old_qid == new_qid:
+                continue
+            submission_ids = (
+                "SELECT id FROM jobs WHERE paper_id = ? AND kind = 'submission'"
+            )
+            conn.execute(
+                f"UPDATE questions SET qid = ? WHERE qid = ? AND job_id IN ({submission_ids})",
+                (new_qid, old_qid, paper_id),
+            )
+            conn.execute(
+                f"UPDATE review_attempts SET qid = ? WHERE qid = ? AND job_id IN ({submission_ids})",
+                (new_qid, old_qid, paper_id),
+            )
+            conn.execute(
+                f"UPDATE chat_messages SET qid = ? WHERE qid = ? AND job_id IN ({submission_ids})",
+                (new_qid, old_qid, paper_id),
+            )
+
+    conn.execute(
+        """UPDATE jobs SET
+             paper_revision = COALESCE(paper_revision,
+               (SELECT revision FROM papers WHERE papers.id = jobs.paper_id)),
+             applied_paper_revision = COALESCE(applied_paper_revision,
+               (SELECT revision FROM papers WHERE papers.id = jobs.paper_id))
+           WHERE kind = 'submission' AND paper_id IS NOT NULL"""
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_questions_source_key "
+        "ON paper_questions(paper_id, source_key) WHERE source_key IS NOT NULL"
+    )
+
+
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8, _v9, _v10, _v11]
 
 
 def init_db() -> None:

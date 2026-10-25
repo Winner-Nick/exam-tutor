@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import weakref
 from pathlib import Path
 
 from .config import JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR, VISION_CACHE_VERSION
@@ -24,13 +25,20 @@ class ProcessingLimitError(RuntimeError):
     pass
 
 
-_locks: dict[tuple[str, str], threading.RLock] = {}
+_locks: weakref.WeakValueDictionary[tuple[str, str], threading.RLock] = (
+    weakref.WeakValueDictionary()
+)
 _locks_guard = threading.Lock()
 
 
 def _resource_lock(kind: str, item_id: str) -> threading.RLock:
+    key = (kind, item_id)
     with _locks_guard:
-        return _locks.setdefault((kind, item_id), threading.RLock())
+        lock = _locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _locks[key] = lock
+        return lock
 
 
 def paper_lock(paper_id: str) -> threading.RLock:
@@ -54,6 +62,10 @@ def write_json_atomic(path: Path, data, indent: int | None = None) -> None:
 
 def new_job_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def new_question_id() -> str:
+    return "q_" + uuid.uuid4().hex
 
 
 def job_dir(job_id: str) -> Path:
@@ -250,7 +262,7 @@ def consume_invite(code: str) -> bool:
 _JOB_FIELDS = {
     "filename", "title", "pdf_sha256", "status", "stage", "progress_done",
     "progress_total", "progress_label", "error", "page_count", "meta_json",
-    "stats_json",
+    "stats_json", "paper_revision", "applied_paper_revision",
 }
 
 
@@ -275,13 +287,17 @@ def create_job(job_id: str, user_id: int, filename: str | None,
     conn = get_conn()
     with transaction():
         _reserve_processing_slot(conn, user_id, max_processing)
+        paper_revision = None
+        if kind == "submission" and paper_id is not None:
+            row = conn.execute("SELECT revision FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            paper_revision = row[0] if row else None
         conn.execute(
             """INSERT INTO jobs (id, user_id, filename, pdf_sha256, status, stage,
                                  progress_done, progress_total, progress_label, created_at,
-                                 kind, paper_id, student_id)
-               VALUES (?, ?, ?, ?, 'processing', 'queued', 0, 1, '排队中…', ?, ?, ?, ?)""",
+                                 kind, paper_id, student_id, paper_revision)
+               VALUES (?, ?, ?, ?, 'processing', 'queued', 0, 1, '排队中…', ?, ?, ?, ?, ?)""",
             (job_id, user_id, filename, pdf_sha256, created_at or time.time(),
-             kind, paper_id, student_id),
+             kind, paper_id, student_id, paper_revision),
         )
 
 
@@ -318,6 +334,8 @@ def _job_row_to_dict(row) -> dict:
         "pdf_sha256": row["pdf_sha256"],
         "kind": row["kind"],
         "paper_id": row["paper_id"],
+        "paper_revision": row["paper_revision"],
+        "applied_paper_revision": row["applied_paper_revision"],
         "student_id": row["student_id"],
         "student_name": row["student_name"] if "student_name" in keys else None,
         "paper_title": row["paper_title"] if "paper_title" in keys else None,
@@ -823,6 +841,14 @@ def create_paper(paper_id: str, user_id: int, title: str | None,
         )
 
 
+def _bump_paper_revision(conn: sqlite3.Connection, paper_id: str) -> int:
+    conn.execute("UPDATE papers SET revision = revision + 1 WHERE id = ?", (paper_id,))
+    row = conn.execute("SELECT revision FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if not row:
+        raise ValueError("试卷不存在")
+    return row[0]
+
+
 def update_paper(paper_id: str, **fields) -> None:
     if "meta" in fields:
         fields["meta_json"] = json.dumps(fields.pop("meta"), ensure_ascii=False)
@@ -853,6 +879,7 @@ def _paper_row_to_dict(row) -> dict:
         "title": row["title"],
         "subject": row["subject"],
         "grade": row["grade"],
+        "revision": row["revision"],
         "status": row["status"],
         "stage": row["stage"],
         "progress": {
@@ -1020,6 +1047,8 @@ def update_paper_file(file_id: str, page_start: int, page_count: int) -> None:
 # ---------------------------------------------------------------------------
 
 def _pq_row_to_dict(row) -> dict:
+    source = json.loads(row["source_json"]) if row["source_json"] else {}
+    occurrences = source.get("occurrences") or []
     return {
         "id": row["qid"],
         "number": row["number"],
@@ -1035,7 +1064,28 @@ def _pq_row_to_dict(row) -> dict:
         "manual_created": bool(row["manual_created"]),
         "content_edited": bool(row["content_edited"]),
         "needs_review": bool(row["needs_review"]),
+        "source_key": row["source_key"],
+        "source_occurrence": source.get("occurrence") or (occurrences[0] if occurrences else None),
+        "source_occurrences": occurrences,
+        "aliases": json.loads(row["alias_json"]) if row["alias_json"] else [],
     }
+
+
+def _paper_question_parts(q: dict, number_key: str | None) -> tuple:
+    occurrence = q.get("source_occurrence")
+    occurrences = q.get("source_occurrences")
+    if occurrences is None:
+        occurrences = [occurrence] if occurrence else []
+    source_json = json.dumps({"occurrences": occurrences}, ensure_ascii=False)
+    aliases = sorted({str(alias) for alias in (q.get("aliases") or []) if alias})
+    return (
+        q["id"], q.get("number"), number_key, q.get("section"), q.get("type"), q.get("stem"),
+        json.dumps(q["options"], ensure_ascii=False) if q.get("options") is not None else None,
+        q.get("passage"), q.get("correct_answer"), q.get("knowledge_point"),
+        1 if q.get("edited") else 0, 1 if q.get("manual_created") else 0,
+        1 if q.get("content_edited") else 0, 1 if q.get("needs_review") else 0,
+        q.get("source_key"), source_json, json.dumps(aliases, ensure_ascii=False),
+    )
 
 
 def _replacement_number_keys(questions: list[dict]) -> list[str | None]:
@@ -1071,32 +1121,36 @@ def _replacement_number_keys(questions: list[dict]) -> list[str | None]:
     return result
 
 
-def replace_paper_questions(paper_id: str, questions: list[dict]) -> None:
+def replace_paper_questions(paper_id: str, questions: list[dict]) -> int:
     qids = [q["id"] for q in questions]
     if len(qids) != len(set(qids)):
         raise ValueError("试卷题目 occurrence ID 重复")
     number_keys = _replacement_number_keys(questions)
+    parts = [
+        _paper_question_parts(q, number_key)
+        for q, number_key in zip(questions, number_keys, strict=True)
+    ]
     conn = get_conn()
     with transaction():
+        old_rows = conn.execute(
+            """SELECT qid, number, number_key, section, type, stem, options_json, passage,
+                      correct_answer, knowledge_point, edited, manual_created, content_edited,
+                      needs_review, source_key, source_json, alias_json
+               FROM paper_questions WHERE paper_id = ?""", (paper_id,),
+        ).fetchall()
+        old = {row["qid"]: tuple(row) for row in old_rows}
+        changed = old != {part[0]: part for part in parts}
         conn.execute("DELETE FROM paper_questions WHERE paper_id = ?", (paper_id,))
         conn.executemany(
             """INSERT INTO paper_questions (paper_id, qid, number, number_key, section, type,
                    stem, options_json, passage, correct_answer, knowledge_point, edited,
-                   manual_created, content_edited, needs_review)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                (
-                    paper_id, q["id"], q.get("number"), number_key, q.get("section"), q.get("type"),
-                    q.get("stem"),
-                    json.dumps(q["options"], ensure_ascii=False)
-                    if q.get("options") is not None else None,
-                    q.get("passage"), q.get("correct_answer"), q.get("knowledge_point"),
-                    1 if q.get("edited") else 0, 1 if q.get("manual_created") else 0,
-                    1 if q.get("content_edited") else 0, 1 if q.get("needs_review") else 0,
-                )
-                for q, number_key in zip(questions, number_keys, strict=True)
-            ],
+                   manual_created, content_edited, needs_review, source_key, source_json, alias_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(paper_id, *part) for part in parts],
         )
+        if changed:
+            return _bump_paper_revision(conn, paper_id)
+        return conn.execute("SELECT revision FROM papers WHERE id = ?", (paper_id,)).fetchone()[0]
 
 
 def get_paper_questions(paper_id: str) -> list[dict]:
@@ -1138,13 +1192,16 @@ def add_paper_question(paper_id: str, number: str, correct_answer: str | None,
         conn.execute(
             """INSERT INTO paper_questions
                (paper_id, qid, number, number_key, section, type, stem, options_json, passage,
-                correct_answer, knowledge_point, edited, manual_created, content_edited)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)""",
+                correct_answer, knowledge_point, edited, manual_created, content_edited,
+                source_json, alias_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?, ?)""",
             (paper_id, qid, number, number_key, content.get("section"), qtype, content.get("stem"),
              json.dumps(content["options"], ensure_ascii=False)
              if content.get("options") is not None else None,
-             content.get("passage"), correct_answer, content.get("knowledge_point")),
+             content.get("passage"), correct_answer, content.get("knowledge_point"),
+             '{"occurrences":[]}', json.dumps([qid])),
         )
+        _bump_paper_revision(conn, paper_id)
     return get_paper_question(paper_id, qid)  # type: ignore[return-value]
 
 
@@ -1152,25 +1209,39 @@ def delete_paper_question(paper_id: str, qid: str) -> bool:
     conn = get_conn()
     with transaction():
         row = conn.execute(
-            "SELECT number FROM paper_questions WHERE paper_id = ? AND qid = ?", (paper_id, qid)
+            "SELECT number, source_key, alias_json FROM paper_questions "
+            "WHERE paper_id = ? AND qid = ?", (paper_id, qid),
         ).fetchone()
         if not row:
             return False
         conn.execute(
-            """INSERT INTO paper_question_tombstones (paper_id, qid, number, deleted_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(paper_id, qid) DO UPDATE SET deleted_at = excluded.deleted_at""",
-            (paper_id, qid, row["number"], time.time()),
+            """INSERT INTO paper_question_tombstones
+               (paper_id, qid, number, deleted_at, source_key, alias_json)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(paper_id, qid) DO UPDATE SET
+                 deleted_at = excluded.deleted_at, number = excluded.number,
+                 source_key = excluded.source_key, alias_json = excluded.alias_json""",
+            (paper_id, qid, row["number"], time.time(), row["source_key"], row["alias_json"]),
         )
         conn.execute("DELETE FROM paper_questions WHERE paper_id = ? AND qid = ?", (paper_id, qid))
+        _bump_paper_revision(conn, paper_id)
     return True
 
 
-def list_paper_question_tombstones(paper_id: str) -> list[dict]:
+def list_paper_question_tombstones(paper_id: str, *, full: bool = False) -> list[dict]:
+    if not full:
+        rows = get_conn().execute(
+            "SELECT qid, number FROM paper_question_tombstones WHERE paper_id = ?", (paper_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
     rows = get_conn().execute(
-        "SELECT qid, number FROM paper_question_tombstones WHERE paper_id = ?", (paper_id,)
+        "SELECT qid, number, source_key, alias_json FROM paper_question_tombstones "
+        "WHERE paper_id = ?", (paper_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [{
+        "qid": row["qid"], "number": row["number"], "source_key": row["source_key"],
+        "aliases": json.loads(row["alias_json"]) if row["alias_json"] else [],
+    } for row in rows]
 
 
 def update_paper_question(paper_id: str, qid: str, *,
@@ -1209,11 +1280,45 @@ def update_paper_question(paper_id: str, qid: str, *,
             ).fetchall()
             if any(normalize_number_key(row["number"]) == number_key for row in existing_numbers):
                 raise sqlite3.IntegrityError("duplicate question number")
+        row = conn.execute(
+            "SELECT * FROM paper_questions WHERE paper_id = ? AND qid = ?", (paper_id, qid),
+        ).fetchone()
+        if not row:
+            return
+        if all(fields[key] == row[key] for key in keys):
+            return
         conn.execute(
             f"UPDATE paper_questions SET {', '.join(k + ' = ?' for k in keys)} "
             "WHERE paper_id = ? AND qid = ?",
             [fields[k] for k in keys] + [paper_id, qid],
         )
+        _bump_paper_revision(conn, paper_id)
+
+
+def update_paper_knowledge_points(paper_id: str, items: dict[str, str | None], *,
+                                  mark_content_edited: bool) -> int:
+    updated = 0
+    conn = get_conn()
+    with transaction():
+        for qid, value in items.items():
+            row = conn.execute(
+                "SELECT knowledge_point, content_edited FROM paper_questions "
+                "WHERE paper_id = ? AND qid = ?", (paper_id, qid),
+            ).fetchone()
+            if not row:
+                continue
+            content_edited = 1 if mark_content_edited else row["content_edited"]
+            if row["knowledge_point"] == value and row["content_edited"] == content_edited:
+                continue
+            conn.execute(
+                "UPDATE paper_questions SET knowledge_point = ?, content_edited = ? "
+                "WHERE paper_id = ? AND qid = ?",
+                (value, content_edited, paper_id, qid),
+            )
+            updated += 1
+        if updated:
+            _bump_paper_revision(conn, paper_id)
+    return updated
 
 
 def update_paper_question_answer(paper_id: str, qid: str, correct_answer: str | None) -> None:

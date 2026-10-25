@@ -33,7 +33,11 @@ def _cleanup_answer_cache(paper_id: str, sha256: str) -> None:
     for other_id in store.list_submission_ids_for_paper(paper_id):
         if any(f.get("sha256") == sha256 for f in store.job_files(other_id)):
             return
-    store.vision_cache_path(sha256, f"ans-{paper_id}").unlink(missing_ok=True)
+    legacy = store.vision_cache_path(sha256, f"ans-{paper_id}")
+    legacy.unlink(missing_ok=True)
+    for path in legacy.parent.glob(f"{sha256}.ans-{paper_id}-r*"):
+        if path.is_file():
+            path.unlink()
 
 
 @router.post("/submissions", status_code=201)
@@ -158,12 +162,21 @@ def accept_partial(job: dict = Depends(auth.get_owned_job)):
         raise HTTPException(409, "没有可保留的识别结果")
     meta = dict(job.get("meta") or {})
     meta["accepted_partial"] = True
-    store.update_job(job["id"], status="done", error=None, meta=meta, stats=store.refresh_stats(job["id"]))
+    source_partial = any(meta.get(key) for key in (
+        "source_needs_review", "source_accepted_partial", "source_failed_pages",
+    ))
+    status = "partial" if source_partial else "done"
+    error = "来源试卷仍需核对，不能接受为普通完成状态" if source_partial else None
+    store.update_job(
+        job["id"], status=status, error=error, meta=meta,
+        stats=store.refresh_stats(job["id"]),
+        progress_label="部分完成" if source_partial else "完成",
+    )
     targets = [q["id"] for q in store.get_questions(job["id"])
                if q.get("status") in ("wrong", "unknown") and not q.get("explanation")]
-    if targets:
+    if targets and status == "done":
         workers.enqueue_explanations(job["id"], targets, priority=1)
-    events.publish(job["id"], "job_done", {"status": "done", "accepted_partial": True})
+    events.publish(job["id"], "job_done", {"status": status, "accepted_partial": True})
     return {"ok": True}
 
 

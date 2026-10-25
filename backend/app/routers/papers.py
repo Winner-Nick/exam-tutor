@@ -192,6 +192,7 @@ def accept_partial(paper: dict = Depends(auth.get_owned_paper)):
     meta = dict(paper.get("meta") or {})
     meta["accepted_partial"] = True
     store.update_paper(paper["id"], status="ready", error=None, meta=meta)
+    pipeline.regrade_paper_submissions(paper["id"], force=True)
     return {"ok": True}
 
 
@@ -261,6 +262,7 @@ def add_question(req: PaperQuestionCreateRequest, paper: dict = Depends(auth.get
     meta = dict(paper.get("meta") or {})
     if not meta.get("failed_pages"):
         store.update_paper(paper["id"], status="ready", error=None)
+    pipeline.regrade_paper_submissions(paper["id"])
     return result
 
 
@@ -303,6 +305,7 @@ def delete_question(qid: str, paper: dict = Depends(auth.get_owned_paper)):
     with store.paper_lock(paper["id"]):
         if not store.delete_paper_question(paper["id"], qid):
             raise HTTPException(404, "题目不存在")
+        pipeline.regrade_paper_submissions(paper["id"])
     return {"ok": True}
 
 
@@ -313,11 +316,16 @@ def knowledge_points(
 ):
     with store.paper_lock(paper["id"]):
         if req and req.items is not None:
-            count = 0
-            for qid, value in req.items.items():
-                if store.get_paper_question(paper["id"], qid):
-                    store.update_paper_question(paper["id"], qid, knowledge_point=(value or "").strip() or None)
-                    count += 1
+            items = {
+                qid: (value or "").strip() or None
+                for qid, value in req.items.items()
+                if store.get_paper_question(paper["id"], qid)
+            }
+            count = store.update_paper_knowledge_points(
+                paper["id"], items, mark_content_edited=True,
+            )
+            if count:
+                pipeline.regrade_paper_submissions(paper["id"])
         else:
             count = pipeline.complete_knowledge_points(paper["id"], overwrite=bool(req and req.overwrite))
     return {"ok": True, "updated": count}

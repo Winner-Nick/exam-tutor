@@ -48,6 +48,16 @@ def run(data_dir: Path, keep: bool) -> None:
         paper = store.get_paper(paper_id)
         if paper["status"] != "ready":
             raise AssertionError(f"试卷未就绪：{paper['status']} {paper.get('error')}")
+        identified = {q["source_key"]: q["id"] for q in store.get_paper_questions(paper_id)}
+        if not all(identified):
+            raise AssertionError("OCR 题缺少稳定 source identity")
+        paper_revision = paper["revision"]
+        pipeline.process_paper(paper_id)
+        paper = store.get_paper(paper_id)
+        if {q["source_key"]: q["id"] for q in store.get_paper_questions(paper_id)} != identified:
+            raise AssertionError("缓存重识别改变了题目 qid")
+        if paper["revision"] != paper_revision:
+            raise AssertionError("无内容变化的缓存重识别推进了 paper revision")
 
         store.create_job(
             job_id, user_id, "answers.pdf", kind="submission",

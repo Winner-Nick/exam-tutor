@@ -11,18 +11,26 @@ VISION_SYSTEM = """你是一名严谨的试卷数字化助手。请把试卷照�
   "page_role": ["questions"],
   "raw_text": "完整文字，保留题号",
   "questions": [{
-    "number": "1", "section": "所属大题", "type": "选择题/填空题/阅读理解/作文等",
+    "number": "当前节内题号 1", "section": "所属大题", "type": "选择题/填空题/阅读理解/作文等",
     "stem": "题干，空格用 ___ 表示", "options": {"A":"…"} 或 null,
     "passage": "与本题关联的阅读原文，没有则 null",
+    "continuation": null,
+    "needs_review": false,
     "student_marked": "学生实际写出的答案或 null",
     "student_marked_confidence": "high/medium/low"
   }],
-  "answer_key": {"1":"B"},
+  "answer_occurrences": [{
+    "section": "答案所属大题或 null", "local_number": "节内题号 1",
+    "page": 1, "answer": "B"
+  }],
   "notes": "不确定之处"
 }
 page_role 可含 cover/questions/answer_key/scoring/essay_sample/other。
 印刷体选项不算学生作答；无法看清时 student_marked 为 null、confidence 为 low。
-答案页 answer_key 只记录真实标准答案，其他页面给 {}。"""
+answer_occurrences 逐条记录真实标准答案，page 填答案实际所在页；其他页面给 []，不要输出扁平 answer_key。
+若本题是上一页或同页某题的续题，仅在有充分证据时填
+continuation={"target_page":目标页码,"target_question_index":目标题在该页 questions 中的序号(从1开始)}；
+否则填 null 并标 needs_review=true，不要自行把同号题合并。"""
 
 
 def vision_user(page_index: int) -> str:
@@ -61,14 +69,23 @@ def paper_context_summary(questions: list[dict]) -> str:
     return "\n".join(f"{nums[0] if len(nums) == 1 else f'{nums[0]}-{nums[-1]}'}: {desc}" for desc, nums in groups)
 
 
-RENUMBER_SYSTEM = """你负责把试卷节内题号换算为全卷统一题号。每道题都有唯一 uid；同一页同号但属于不同大题的题也必须分别处理。
-根据页面顺序、大题、题型、题干和参考答案推断。只输出：
-{"mapping":[{"uid":"输入中的完整uid","global":"13"}]}
-mapping 必须覆盖每道题；无法确定的 global 填 null，不要猜。已是全卷题号则原样返回。"""
+RENUMBER_SYSTEM = """你负责把题目 occurrence 与答案 occurrence 关联并换算全卷题号。
+同一页或不同节的同号题是不同 occurrence，必须结合 section、页码、节内题号、题干和答案逐条对应，禁止后写覆盖。
+只输出：
+{
+  "mapping": [{"uid":"题目uid","global":"13或null"}],
+  "answer_mapping": [{"uid":"答案uid","question_uid":"目标题目uid或null","global":"13或null"}]
+}
+两组 mapping 必须覆盖全部输入。question_uid 能确定时优先填写；不能确定目标题时填 null，不要猜。
+global 无法确定也填 null。已是全卷题号则原样返回。"""
 
 
-def renumber_user(compact: list[dict], answer_key: dict[str, str]) -> str:
-    return "逐题 uid 与内容：\n" + json.dumps(compact, ensure_ascii=False) + "\n参考答案：\n" + json.dumps(answer_key, ensure_ascii=False) + "\n请按 uid 输出 mapping。"
+def renumber_user(compact: list[dict], answer_occurrences: list[dict] | dict[str, str]) -> str:
+    return (
+        "逐题 uid 与内容：\n" + json.dumps(compact, ensure_ascii=False)
+        + "\n逐条答案 occurrence：\n" + json.dumps(answer_occurrences, ensure_ascii=False)
+        + "\n请同时输出题目 mapping 与 answer_mapping。"
+    )
 
 
 def tutor_context(job: dict | None = None) -> str:
