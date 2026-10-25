@@ -16,7 +16,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from .. import security
+from .. import security, store
 from ..config import DATA_DIR
 
 router = APIRouter(prefix="/api/releases", tags=["releases"])
@@ -72,17 +72,25 @@ def get_releases() -> list[dict]:
     with _cache_lock:
         if _cache["data"] is not None and time.time() - _cache["at"] < CACHE_TTL:
             return _cache["data"]
-    try:
-        data = _fetch_releases()
-        with _cache_lock:
+        try:
+            data = _fetch_releases()
             _cache.update(at=time.time(), data=data)
-        _disk_cache_path().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        return data
-    except Exception:  # noqa: BLE001 - GitHub 不可达时用磁盘兜底
-        p = _disk_cache_path()
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-        raise HTTPException(503, "暂时无法获取版本列表，请稍后再试") from None
+            store.write_json_atomic(_disk_cache_path(), data)
+            return data
+        except Exception:  # noqa: BLE001 - GitHub 不可达时用磁盘兜底
+            p = _disk_cache_path()
+            if p.exists():
+                try:
+                    return json.loads(p.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass
+            raise HTTPException(503, "暂时无法获取版本列表，请稍后再试") from None
+
+
+def _prune_apk_cache(max_files: int = 3) -> None:
+    apks = sorted(RELEASES_DIR.glob("*.apk"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in apks[max_files:]:
+        path.unlink(missing_ok=True)
 
 
 @router.get("")
@@ -117,6 +125,7 @@ def download_apk(tag: str, request: Request):
                             for chunk in r.iter_bytes(1 << 20):
                                 f.write(chunk)
                     tmp.replace(cached)
+                    _prune_apk_cache()
                 except Exception:  # noqa: BLE001
                     tmp.unlink(missing_ok=True)
                     raise HTTPException(502, "安装包拉取失败，请稍后再试") from None
