@@ -139,11 +139,33 @@ backend/
     llm.py        DeepSeek 视觉与文本统一客户端
     pipeline.py   试卷入库 + 作答判分 + 补拍合并
     routers/      auth / students / papers / jobs / questions / chat / insights
-  scripts/        数据迁移脚本
+  scripts/        数据迁移、备份与校验脚本
 frontend/         React + Vite + TS + Tailwind(构建产物 dist/ 由后端托管)
 deploy/           systemd 单元
 data/             SQLite(app.db) + 试卷/批改文件 + 视觉识别缓存(不入库)
 ```
+
+## 测试与检查
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+cd frontend && npm install && cd ..
+./scripts/check.sh
+```
+
+检查脚本依次执行 Python 编译、依赖一致性、后端 pytest、前端 Vitest 和生产构建。GitHub Actions 会对 main 与 Pull Request 运行相同检查。
+
+## 备份与恢复
+
+```bash
+# 创建备份并自动校验；默认保留最近 7 份
+.venv/bin/python -m backend.scripts.backup_data --keep 7
+
+# 只校验指定备份
+.venv/bin/python -m backend.scripts.backup_data --verify data/backups/examtutor-目录名
+```
+
+备份使用 SQLite 在线 backup API，包含 `app.db`、试卷/作答文件和视觉缓存，并附 SHA-256 清单与完整性检查。`--skip-cache` 可不备份可重新生成的视觉缓存。恢复时先停止服务并另存当前 `data/`，再恢复备份中的 `app.db`、`jobs/`、`papers/` 和需要的 `vision_cache/`，最后启动服务并访问 `/api/health/ready`。文件量较大时，恢复演练应与实际备份分开执行。
 
 ## 已知限制
 
