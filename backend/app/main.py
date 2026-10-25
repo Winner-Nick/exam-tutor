@@ -8,9 +8,9 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import events, workers
+from . import __version__, events, workers
 from .config import FRONTEND_DIST, settings
-from .db import init_db
+from .db import get_conn, init_db
 from .routers import auth as auth_router
 from .routers import chat as chat_router
 from .routers import feedback as feedback_router
@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ExamTutor", version="0.2.0", lifespan=lifespan,
+app = FastAPI(title="ExamTutor", version=__version__, lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(OriginCheckMiddleware)
@@ -55,10 +55,25 @@ app.include_router(insights_router.router)
 
 @app.get("/api/health")
 def health():
-    # 未认证可见：不透露具体缺哪项配置（避免广播可利用面），详情见启动日志
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/health/ready")
+def ready():
+    try:
+        get_conn().execute("SELECT 1").fetchone()
+    except Exception:
+        return JSONResponse({"ok": False, "version": __version__, "database": "unavailable"}, status_code=503)
+    return JSONResponse({"ok": True, "version": __version__, "database": "ok"})
+
+
+@app.api_route(
+    "/api/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    include_in_schema=False,
+)
+def unknown_api(path: str):
+    return JSONResponse({"detail": "接口不存在"}, status_code=404)
 
 
 # ---------------------------------------------------------------------------
