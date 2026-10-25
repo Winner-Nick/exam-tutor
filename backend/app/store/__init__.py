@@ -1,0 +1,132 @@
+"""SQLite 持久化 DAO 兼容 facade。"""
+from __future__ import annotations
+
+from ..config import JOBS_DIR, PAPERS_DIR, VISION_CACHE_DIR, VISION_CACHE_VERSION
+from ..db import get_conn, normalize_number_key, read_snapshot, transaction
+from .chat import add_chat_message, get_chat
+from .common import (
+    ProcessingLimitError,
+    _locks,
+    _locks_guard,
+    _reserve_processing_slot,
+    _resource_lock,
+    job_lock,
+    paper_lock,
+    write_json_atomic,
+)
+from .feedback import add_feedback, delete_feedback, list_feedback
+from .files import (
+    cleanup_answer_cache,
+    cleanup_path,
+    job_dir,
+    job_file_path,
+    job_files,
+    new_job_id,
+    new_question_id,
+    paper_dir,
+    paper_file_path,
+    pdf_path,
+    save_job_files,
+    vision_cache_path,
+)
+from .jobs import (
+    _JOB_FIELDS,
+    _JOB_SELECT,
+    _job_row_to_dict,
+    count_processing,
+    count_recent_uploads,
+    create_job,
+    delete_job,
+    find_reusable_job_by_sha,
+    get_job,
+    get_job_full,
+    list_deleting_job_ids,
+    list_jobs,
+    list_jobs_page,
+    list_processing_job_ids,
+    set_progress,
+    update_job,
+)
+from .papers import (
+    MAX_PAPER_QUESTIONS,
+    _PAPER_FIELDS,
+    _PAPER_SELECT,
+    _bump_paper_revision,
+    _paper_question_parts,
+    _paper_row_to_dict,
+    _pq_row_to_dict,
+    _replacement_number_keys,
+    add_paper_file,
+    add_paper_question,
+    count_processing_papers,
+    create_paper,
+    delete_paper,
+    delete_paper_file,
+    delete_paper_question,
+    get_paper,
+    get_paper_question,
+    get_paper_questions,
+    list_deleting_paper_ids,
+    list_paper_files,
+    list_paper_question_tombstones,
+    list_papers,
+    list_papers_page,
+    list_processing_paper_ids,
+    list_submission_ids_for_paper,
+    replace_paper_questions,
+    set_paper_file_sha,
+    set_paper_progress,
+    try_mark_job_deleting,
+    try_mark_job_processing,
+    try_mark_paper_deleting,
+    try_mark_paper_processing,
+    update_paper,
+    update_paper_file,
+    update_paper_knowledge_points,
+    update_paper_question,
+    update_paper_question_answer,
+)
+from .questions import (
+    _Q_FIELDS,
+    _Q_SEMANTIC_FIELDS,
+    _q_row_to_dict,
+    get_question,
+    get_questions,
+    refresh_stats,
+    replace_questions,
+    update_question,
+)
+from .reviews import (
+    add_review_attempt,
+    fail_explanation,
+    list_review_attempts,
+    mark_explain_queued,
+    reset_stale_explanations,
+    write_explanation,
+)
+from .students import (
+    count_student_submissions,
+    create_student,
+    delete_student,
+    ensure_self_student,
+    get_student,
+    list_students,
+    rename_student,
+)
+from .users import (
+    consume_invite,
+    count_users,
+    create_invite,
+    create_student_account,
+    create_user,
+    delete_invite,
+    delete_student_account,
+    get_account_for_student,
+    get_user,
+    get_user_by_username,
+    list_invites,
+    list_users,
+    set_password,
+)
+
+__all__ = [name for name in globals() if not name.startswith("__")]
