@@ -15,6 +15,7 @@ import { useToast } from '../components/Toast'
 import { useUploadGuard } from '../hooks/useUploadGuard'
 import type { Job, User } from '../types'
 import { compressPicked } from '../utils/compressImage'
+import { emptyPageTarget } from '../utils/pagination'
 import { invalidateLearningData } from '../utils/query'
 
 const PAGE_SIZE = 9
@@ -186,6 +187,16 @@ export function DashboardPage() {
 
   const total = jobs.data ? jobs.data.total ?? jobs.data.jobs.length : 0
   const filtered = !!(recordStudent || recordPaper || recordQuery)
+
+  useEffect(() => {
+    const target = emptyPageTarget(page, total, PAGE_SIZE, jobs.data?.jobs.length)
+    if (target === null) return
+    setParams((old) => {
+      const next = new URLSearchParams(old)
+      next.set('page', String(target))
+      return next
+    })
+  }, [page, total, jobs.data?.jobs.length, setParams])
 
   return (
     <div className="space-y-6">

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#b3402a" />
+  <script src="/offline.js" defer></script>
   <title>暂时离线 · 错题家教</title>
   <style>
     * { box-sizing: border-box; }
@@ -21,7 +22,7 @@
     <div class="seal">错</div>
     <h1>暂时无法连接服务器</h1>
     <p>你当前可能处于离线状态，或服务器暂时不可达。已保存在服务器上的试卷和批改记录仍然安全。</p>
-    <button onclick="location.reload()">重新连接</button>
+    <button id="reconnect" type="button">重新连接</button>
     <small>为保护隐私，离线模式不缓存学生作答、聊天或个人学习数据。请恢复网络后继续使用。</small>
   </main>
 </body>

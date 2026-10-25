@@ -10,17 +10,19 @@ export function Dialog({
   onClose,
   className = 'max-w-md',
   hideClose = false,
+  preventClose = false,
 }: {
   title: string
   children: ReactNode
   onClose: () => void
   className?: string
   hideClose?: boolean
+  preventClose?: boolean
 }) {
   const titleId = useId()
   const panelRef = useRef<HTMLDivElement>(null)
-  const closeRef = useRef(onClose)
-  closeRef.current = onClose
+  const closeRef = useRef({ onClose, blocked: hideClose || preventClose })
+  closeRef.current = { onClose, blocked: hideClose || preventClose }
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -33,24 +35,29 @@ export function Dialog({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        closeRef.current()
+        if (!closeRef.current.blocked) closeRef.current.onClose()
         return
       }
       if (event.key !== 'Tab' || !panelRef.current) return
-      const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+      const panel = panelRef.current
+      const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
         (el) => el.offsetParent !== null,
       )
       if (items.length === 0) {
         event.preventDefault()
-        panelRef.current.focus()
+        panel.focus()
         return
       }
       const firstItem = items[0]
       const lastItem = items[items.length - 1]
-      if (event.shiftKey && document.activeElement === firstItem) {
+      const active = document.activeElement
+      if (active === panel || !panel.contains(active)) {
+        event.preventDefault()
+        ;(event.shiftKey ? lastItem : firstItem).focus()
+      } else if (event.shiftKey && active === firstItem) {
         event.preventDefault()
         lastItem.focus()
-      } else if (!event.shiftKey && document.activeElement === lastItem) {
+      } else if (!event.shiftKey && active === lastItem) {
         event.preventDefault()
         firstItem.focus()
       }
@@ -64,7 +71,7 @@ export function Dialog({
   }, [])
 
   const backdropClick = (event: MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget) onClose()
+    if (event.target === event.currentTarget && !hideClose && !preventClose) onClose()
   }
 
   return createPortal(
@@ -80,7 +87,7 @@ export function Dialog({
         <div className="mb-4 flex items-start justify-between gap-3">
           <h2 id={titleId} className="font-serif text-lg font-bold text-ink">{title}</h2>
           {!hideClose && (
-            <button onClick={onClose} className="icon-btn -mt-2 -mr-2" aria-label="关闭对话框">
+            <button onClick={onClose} disabled={preventClose} className="icon-btn -mt-2 -mr-2" aria-label="关闭对话框">
               <Icon name="x" size={18} />
             </button>
           )}

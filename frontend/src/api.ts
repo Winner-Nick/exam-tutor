@@ -59,7 +59,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(0, '网络连接失败，请检查网络后重试', 'network')
   }
-  const text = await res.text()
+  let text: string
+  try {
+    text = await res.text()
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError(0, '请求已取消', 'abort')
+    }
+    throw new ApiError(0, '网络连接中断，请检查网络后重试', 'network')
+  }
   let data: unknown = null
   if (text) {
     try {

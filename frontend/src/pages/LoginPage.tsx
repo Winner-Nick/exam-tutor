@@ -130,7 +130,12 @@ export function LoginPage() {
             <p className="text-sm text-ink2">当前开放注册，无需邀请码。</p>
           )}
           {mode === 'register' && options.isError && (
-            <p className="text-xs text-dim">无法确认注册配置；若无需邀请码，可留空后重试。</p>
+            <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200" role="alert">
+              <p>注册配置加载失败。当前按邀请码注册处理，请填写邀请码，或重试加载配置。</p>
+              <button type="button" disabled={options.isFetching} onClick={() => void options.refetch()} className="mt-2 min-h-8 font-medium underline">
+                {options.isFetching ? '正在重试…' : '重试加载注册配置'}
+              </button>
+            </div>
           )}
           {error && (
             <p className="fade-up flex items-center gap-1.5 text-sm text-rose-700 dark:text-rose-300" role="alert">

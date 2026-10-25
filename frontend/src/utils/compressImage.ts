@@ -11,7 +11,10 @@ export async function compressImage(file: File, maxDim = 1600, quality = 0.85): 
       const canvas = document.createElement('canvas')
       canvas.width = Math.round(bmp.width * scale)
       canvas.height = Math.round(bmp.height * scale)
-      canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height)
+      const context = canvas.getContext('2d')!
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      context.drawImage(bmp, 0, 0, canvas.width, canvas.height)
       const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', quality))
       if (!blob || blob.size >= file.size) return file
       return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })

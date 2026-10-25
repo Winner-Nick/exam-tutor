@@ -6,8 +6,11 @@ export function useSerialTasks() {
   const mounted = useRef(true)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => () => {
-    mounted.current = false
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
   }, [])
 
   const enqueue = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {

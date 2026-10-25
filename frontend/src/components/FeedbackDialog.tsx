@@ -20,7 +20,7 @@ export function FeedbackDialog({ onClose }: { onClose: () => void }) {
   })
 
   return (
-    <Dialog title="问题反馈" onClose={onClose} hideClose={submit.isPending}>
+    <Dialog title="问题反馈" onClose={onClose} hideClose={submit.isPending} preventClose={submit.isPending}>
       <p className="text-sm leading-relaxed text-ink2">
         提交时会附上当前页面与设备信息（机型、浏览器内核、近期报错），帮助定位问题。
       </p>

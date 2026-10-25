@@ -14,6 +14,7 @@ import { useToast } from '../components/Toast'
 import { useUploadGuard } from '../hooks/useUploadGuard'
 import type { Paper } from '../types'
 import { compressPicked } from '../utils/compressImage'
+import { emptyPageTarget } from '../utils/pagination'
 import { invalidateLearningData } from '../utils/query'
 
 const PAGE_SIZE = 12
@@ -108,6 +109,16 @@ export function PapersPage() {
   const remaining = Math.max(0, 30 - pendingFiles.length)
   const total = papers.data ? papers.data.total ?? papers.data.papers.length : 0
 
+  useEffect(() => {
+    const target = emptyPageTarget(page, total, PAGE_SIZE, papers.data?.papers.length)
+    if (target === null) return
+    setParams((old) => {
+      const next = new URLSearchParams(old)
+      next.set('page', String(target))
+      return next
+    })
+  }, [page, total, papers.data?.papers.length, setParams])
+
   async function addFiles(list: FileList | null) {
     if (busy || remaining === 0) return
     setPicking('正在处理…')
@@ -191,7 +202,7 @@ export function PapersPage() {
       </section>
 
       {manualOpen && (
-        <Dialog title="手动创建试卷" onClose={() => !manual.isPending && setManualOpen(false)} hideClose={manual.isPending}>
+        <Dialog title="手动创建试卷" onClose={() => !manual.isPending && setManualOpen(false)} hideClose={manual.isPending} preventClose={manual.isPending}>
           <form onSubmit={(event) => { event.preventDefault(); if (manualTitle.trim()) manual.mutate({ title: manualTitle.trim(), subject, grade }) }} className="space-y-4">
             <p className="text-sm leading-relaxed text-ink2">适合只有答案或需要逐题录入的情况。创建后可继续编辑题干、选项、答案和知识点。</p>
             <label className="block text-sm font-medium text-ink2">试卷名称<input value={manualTitle} onChange={(event) => setManualTitle(event.target.value)} maxLength={80} required autoFocus className="input mt-1" /></label>
