@@ -36,7 +36,7 @@ jobs:
           ok=""
           for i in 1 2 3; do
             rm -rf node_modules
-            npm ci --no-audit --no-fund || true
+            npm ci --no-audit --no-fund --registry=https://registry.npmjs.org --replace-registry-host=always || true
             if npm ls --all > /dev/null 2>&1; then
               ok=1; break
             fi
