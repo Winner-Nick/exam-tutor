@@ -50,3 +50,14 @@ it('stays quiet when the native app is already current', async () => {
   await waitFor(() => expect(api.listReleases).toHaveBeenCalledOnce())
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })
+
+it('offers updates to older shells without the native App plugin', async () => {
+  vi.mocked(Capacitor.isNativePlatform).mockReturnValue(true)
+  vi.mocked(NativeApp.getInfo).mockRejectedValue(new Error('App plugin is not implemented'))
+  vi.mocked(NativeApp.addListener).mockRejectedValue(new Error('App plugin is not implemented'))
+  vi.mocked(api.listReleases).mockResolvedValue({ releases: [release] })
+  render(<AppUpdatePrompt />)
+
+  expect(await screen.findByRole('dialog', { name: '发现新版本' })).toBeInTheDocument()
+  expect(screen.getByText('当前版本 未知，可以更新到 v1.2.0。')).toBeInTheDocument()
+})

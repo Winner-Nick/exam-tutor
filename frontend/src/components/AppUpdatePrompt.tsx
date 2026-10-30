@@ -39,9 +39,10 @@ export function AppUpdatePrompt() {
       checking = true
       lastChecked = Date.now()
       try {
-        const [info, result] = await Promise.all([NativeApp.getInfo(), api.listReleases()])
+        const infoPromise = NativeApp.getInfo().catch(() => ({ version: '0.0.0' }))
+        const [info, result] = await Promise.all([infoPromise, api.listReleases()])
         if (!mounted) return
-        setCurrentVersion(info.version)
+        setCurrentVersion(info.version === '0.0.0' ? '' : info.version)
         const latest = result.releases.find((release) =>
           release.apk_size != null && !release.prerelease && isNewerVersion(release.tag, info.version),
         )
@@ -56,12 +57,12 @@ export function AppUpdatePrompt() {
     void check(true)
     const listener = NativeApp.addListener('appStateChange', ({ isActive }) => {
       if (isActive) void check()
-    })
+    }).catch(() => null)
     const timer = window.setInterval(() => void check(), CHECK_INTERVAL)
     return () => {
       mounted = false
       window.clearInterval(timer)
-      void listener.then((handle) => handle.remove())
+      void listener.then((handle) => handle?.remove())
     }
   }, [dismissedTag])
 
