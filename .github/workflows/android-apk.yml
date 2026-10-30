@@ -37,7 +37,7 @@ jobs:
           for i in 1 2 3; do
             rm -rf node_modules
             npm ci --no-audit --no-fund || true
-            if npm ls react-router-dom @tanstack/react-query react typescript vite > /dev/null 2>&1; then
+            if npm ls --all > /dev/null 2>&1; then
               ok=1; break
             fi
             echo "依赖安装不完整，第 $i 次重试…"; sleep 10
