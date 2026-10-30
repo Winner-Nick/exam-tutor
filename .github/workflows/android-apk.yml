@@ -70,8 +70,8 @@ jobs:
           EOF
           npx cap add android
           npx @capacitor/assets generate --android \
-            --iconBackgroundColor '#078a67' --iconBackgroundColorDark '#007555' \
-            --splashBackgroundColor '#f6f6f1' --splashBackgroundColorDark '#151915'
+            --iconBackgroundColor '#EAF5EC' --iconBackgroundColorDark '#EAF5EC' \
+            --splashBackgroundColor '#EAF5EC' --splashBackgroundColorDark '#EAF5EC'
           sed -i 's/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName "1.0.0"/versionName "'"$VERSION_NAME"'"/' \
             android/app/build.gradle
           # 拍照上传需要相机权限

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  
+  <g transform="translate(512 512) scale(0.75) translate(-497.5 -465.0)">
+  <!-- white front strip (behind the bird) -->
+  <path fill="#FFFFFF" d="M 200 340 L 345 470
+        C 352 540, 375 610, 400 650 C 425 690, 450 715, 470 744
+        L 545 780 L 490 480 Z"/>
+  <!-- left face (its right edge follows the white band) -->
+  <path fill="#5FA877" d="M 200 340 L 345 470
+        C 352 540, 375 610, 400 650 C 425 690, 450 715, 470 744
+        L 255 640 Z"/>
+  <!-- right face -->
+  <polygon points="490,480 740,290 795,590 545,780" fill="#6DBA86"/>
+  <!-- top face (green rim) -->
+  <polygon points="490,480 740,290 450,150 200,340" fill="#5DAE77"/>
+  <!-- white cap on top -->
+  <g transform="matrix(0.25 -0.19 -0.29 -0.14 490 480)">
+    <path fill="#FFFFFF" d="M -4 1004 C 300 985, 560 950, 735 900
+                         C 900 850, 950 740, 975 560
+                         L 1006 -4 L -4 -4 Z"/>
+  </g>
+  <!-- bird: beak left, round head, long body tapering to the bottom corner -->
+  <path fill="#5FA877" d="M 350 495 L 396 449
+        C 410 437, 434 444, 443 466
+        C 457 510, 471 565, 490 625
+        C 505 672, 521 722, 538 774
+        C 524 758, 505 736, 486 718
+        C 456 690, 427 665, 409 637
+        C 392 605, 385 560, 382 501 Z"/>
+  <!-- right face: "100" + base line -->
+  <g transform="matrix(0.25 -0.19 0.055 0.3 490 480)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="215" y1="195" x2="215" y2="735" stroke-width="58"/>
+    <rect x="365" y="185" width="185" height="555" rx="48" stroke-width="54"/>
+    <rect x="690" y="175" width="185" height="555" rx="48" stroke-width="54"/>
+    <line x1="70" y1="905" x2="955" y2="905" stroke-width="40"/>
+  </g>
+  </g>
+</svg>

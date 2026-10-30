@@ -90,7 +90,7 @@ export function Onboarding({ user, onClose, onStartTour, onOpenGuide }: Onboardi
       >
         <div className="flex items-center justify-between gap-4 border-b border-line px-5 py-4 sm:px-7">
           <div className="flex items-center gap-2.5">
-            <span className="seal h-9 w-9">方</span>
+            <span className="seal h-9 w-9"><img src="/icons/icon-192.png" alt="" /></span>
             <div>
               <p className="text-xs font-medium text-primary-600 dark:text-primary-400">{slide.eyebrow}</p>
               <p className="text-xs text-dim">首次使用向导</p>

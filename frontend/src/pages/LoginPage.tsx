@@ -57,7 +57,7 @@ export function LoginPage() {
         <div className="pointer-events-none absolute -top-32 -right-24 h-96 w-96 rounded-full border-[70px] border-primary-100/50 dark:border-primary-950/30" />
         <div className="pointer-events-none absolute -bottom-40 -left-24 h-[30rem] w-[30rem] rounded-full bg-primary-100/40 blur-3xl dark:bg-primary-950/30" />
         <div className="relative flex h-28 items-center gap-3">
-          <span className="seal h-11 w-11 text-xl">方</span>
+          <span className="seal h-11 w-11 text-xl"><img src="/icons/icon-192.png" alt="" /></span>
           <div><p className="font-serif text-xl font-bold">错题小方</p><p className="mt-0.5 text-[9px] font-semibold tracking-[0.22em] text-dim">EXAM TUTOR</p></div>
         </div>
         <div className="relative my-auto max-w-xl py-12">
@@ -85,7 +85,7 @@ export function LoginPage() {
 
         <div className="relative w-full max-w-[25rem]">
           <div className="mb-7 text-center lg:hidden">
-            <div className="seal mx-auto h-13 w-13 text-2xl">方</div>
+            <div className="seal mx-auto h-13 w-13"><img src="/icons/icon-192.png" alt="" /></div>
             <p className="mt-3 font-serif text-2xl font-bold">错题小方</p>
             <p className="mt-1 text-xs text-dim">错题有归纳，做题有方法</p>
           </div>
