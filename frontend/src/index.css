@@ -353,8 +353,8 @@ textarea::placeholder {
 }
 
 .seal {
-  @apply inline-flex items-center justify-center rounded-[0.7rem] bg-primary-600 font-serif font-bold text-white select-none;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.2), inset 0 0 0 3px rgb(180 74 47 / 0.25), 0 4px 10px -4px rgb(98 46 36 / 0.55);
+  @apply inline-flex items-center justify-center rounded-[0.7rem] bg-[#078a67] font-serif font-bold text-white select-none;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25), inset 0 0 0 3px rgb(0 105 78 / 0.2), 0 4px 10px -4px rgb(0 83 61 / 0.55);
 }
 
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {

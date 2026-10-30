@@ -10,7 +10,7 @@ vi.mock('@capacitor/app', () => ({ App: { getInfo: vi.fn(), addListener: vi.fn()
 vi.mock('../api', () => ({ api: { listReleases: vi.fn() } }))
 
 const release = {
-  tag: 'v1.2.0', name: '错题家教 v1.2.0', body: '', published_at: null,
+  tag: 'v1.2.0', name: '错题小方 v1.2.0', body: '', published_at: null,
   prerelease: false, apk_size: 1000,
 }
 

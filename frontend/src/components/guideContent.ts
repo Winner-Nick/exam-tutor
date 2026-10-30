@@ -67,7 +67,7 @@ export const ONBOARDING_SLIDES: Record<GuideRole, OnboardingSlide[]> = {
       id: 'welcome',
       eyebrow: '老师 / 管理员入门',
       title: '把批改时间留给真正的讲解',
-      description: '错题家教将试卷识别、作答判分、错题归集和 AI 答疑串在一起。一份试卷可以复用于多位学生，每份作答仍独立保存。',
+      description: '错题小方将试卷识别、作答判分、错题归集和 AI 答疑串在一起。一份试卷可以复用于多位学生，每份作答仍独立保存。',
       features: [
         { icon: 'book', title: '试卷只录一次', text: '识别题目与标准答案，之后反复用于不同学生。' },
         { icon: 'users', title: '学生各自归档', text: '批改、错题和统计按学生分开，不会混成一条趋势。' },

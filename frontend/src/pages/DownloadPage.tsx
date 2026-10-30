@@ -74,9 +74,9 @@ export function DownloadPage() {
       <div className="relative overflow-hidden">
         <div className="pointer-events-none absolute -top-24 left-1/2 h-72 w-[36rem] -translate-x-1/2 rounded-full bg-primary-200/40 blur-3xl dark:bg-primary-900/20" />
         <div className="relative mx-auto max-w-2xl px-4 pt-14 pb-10 text-center">
-          <div className="seal mx-auto h-24 w-24 rounded-3xl text-5xl shadow-xl">错</div>
-          <h1 className="mt-5 font-serif text-3xl font-bold tracking-wide">错题家教</h1>
-          <p className="mt-2 text-ink2">拍照上传作答 · 自动判分 · AI 讲解每一道错题</p>
+          <div className="seal mx-auto h-24 w-24 rounded-3xl text-5xl shadow-xl">方</div>
+          <h1 className="mt-5 font-serif text-3xl font-bold tracking-wide">错题小方</h1>
+          <p className="mt-2 text-ink2">错题有归纳，做题有方法</p>
 
           {latest?.apk_size != null && (
             <div className="mt-7">

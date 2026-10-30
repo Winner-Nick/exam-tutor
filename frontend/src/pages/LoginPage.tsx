@@ -57,12 +57,12 @@ export function LoginPage() {
         <div className="pointer-events-none absolute -top-32 -right-24 h-96 w-96 rounded-full border-[70px] border-primary-100/50 dark:border-primary-950/30" />
         <div className="pointer-events-none absolute -bottom-40 -left-24 h-[30rem] w-[30rem] rounded-full bg-primary-100/40 blur-3xl dark:bg-primary-950/30" />
         <div className="relative flex h-28 items-center gap-3">
-          <span className="seal h-11 w-11 text-xl">错</span>
-          <div><p className="font-serif text-xl font-bold">错题家教</p><p className="mt-0.5 text-[9px] font-semibold tracking-[0.22em] text-dim">EXAM TUTOR</p></div>
+          <span className="seal h-11 w-11 text-xl">方</span>
+          <div><p className="font-serif text-xl font-bold">错题小方</p><p className="mt-0.5 text-[9px] font-semibold tracking-[0.22em] text-dim">EXAM TUTOR</p></div>
         </div>
         <div className="relative my-auto max-w-xl py-12">
           <p className="flex items-center gap-2 text-xs font-semibold tracking-[0.16em] text-primary-700 dark:text-primary-300"><span className="h-px w-8 bg-primary-400" />从一道错题开始</p>
-          <h2 className="mt-6 font-serif text-[2.65rem] leading-[1.35] font-bold tracking-normal xl:text-5xl xl:leading-[1.35]">让每一道错题，<br />都成为进步的下一步。</h2>
+          <h2 className="mt-6 font-serif text-[2.65rem] leading-[1.35] font-bold tracking-normal xl:text-5xl xl:leading-[1.35]">错题有归纳，<br />做题有方法。</h2>
           <p className="mt-6 max-w-md text-base leading-8 text-ink2">拍照、核对、讲解、复习。把繁琐的批改交给工具，把时间和注意力留给真正重要的学习。</p>
           <div className="mt-10 space-y-3">
             {FEATURES.map((feature, index) => (
@@ -85,9 +85,9 @@ export function LoginPage() {
 
         <div className="relative w-full max-w-[25rem]">
           <div className="mb-7 text-center lg:hidden">
-            <div className="seal mx-auto h-13 w-13 text-2xl">错</div>
-            <p className="mt-3 font-serif text-2xl font-bold">错题家教</p>
-            <p className="mt-1 text-xs text-dim">让每一道错题都有收获</p>
+            <div className="seal mx-auto h-13 w-13 text-2xl">方</div>
+            <p className="mt-3 font-serif text-2xl font-bold">错题小方</p>
+            <p className="mt-1 text-xs text-dim">错题有归纳，做题有方法</p>
           </div>
 
           <div className="card p-5 sm:p-7 lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none">

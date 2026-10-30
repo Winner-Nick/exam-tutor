@@ -39,10 +39,10 @@ function itemActive(item: NavItem, pathname: string) {
 
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
-    <Link to="/" aria-label="错题家教首页" className="flex shrink-0 items-center gap-3 rounded-xl">
-      <span className={`seal ${compact ? 'h-9 w-9 text-base' : 'h-10 w-10 text-lg'}`}>错</span>
+    <Link to="/" aria-label="错题小方首页" className="flex shrink-0 items-center gap-3 rounded-xl">
+      <span className={`seal ${compact ? 'h-9 w-9 text-base' : 'h-10 w-10 text-lg'}`}>方</span>
       <span>
-        <span className={`block font-serif font-bold text-ink ${compact ? 'text-base' : 'text-lg'}`}>错题家教</span>
+        <span className={`block font-serif font-bold text-ink ${compact ? 'text-base' : 'text-lg'}`}>错题小方</span>
         {!compact && <span className="mt-0.5 block text-[9px] font-semibold tracking-[0.22em] text-dim">EXAM TUTOR</span>}
       </span>
     </Link>

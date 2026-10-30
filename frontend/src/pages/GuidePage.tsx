@@ -277,7 +277,7 @@ export function GuidePage() {
             <div className="relative flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div className="max-w-2xl">
                 <p className="flex items-center gap-2 text-sm font-medium text-primary-700 dark:text-primary-300">
-                  <Icon name="book-open" size={18} /> 错题家教 · 教程中心
+                  <Icon name="book-open" size={18} /> 错题小方 · 教程中心
                 </p>
                 <h1 className="mt-3 font-serif text-3xl font-bold sm:text-4xl">从第一次上传到真正掌握</h1>
                 <p className="mt-3 text-sm leading-7 text-ink2 sm:text-base">
@@ -605,7 +605,7 @@ export function GuidePage() {
       </div>
 
       <div className="guide-print-root hidden" aria-hidden="true">
-        <h1>错题家教 · {role === 'teacher' ? '老师' : '学生'}完整教程</h1>
+        <h1>错题小方 · {role === 'teacher' ? '老师' : '学生'}完整教程</h1>
         <p>包含快速开始、详细操作、进阶功能、复习与导出、账号安全和 FAQ。AI 可能出错，请始终核对关键结果。</p>
         <section>
           <h2>学习清单</h2>

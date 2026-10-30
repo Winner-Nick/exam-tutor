@@ -1,13 +1,13 @@
 {
-  "name": "错题家教",
-  "short_name": "错题家教",
-  "description": "拍照批改作业，自动判分与错题讲解",
+  "name": "错题小方",
+  "short_name": "错题小方",
+  "description": "错题有归纳，做题有方法",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f6f3ec",
-  "theme_color": "#b3402a",
+  "theme_color": "#078a67",
   "lang": "zh-CN",
   "icons": [
     {

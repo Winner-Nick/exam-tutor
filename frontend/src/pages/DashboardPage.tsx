@@ -254,7 +254,7 @@ export function DashboardPage() {
     <div className="space-y-7">
       <PageHeader
         title={isStudent ? '我的批改' : '拍照批改'}
-        description="选好试卷，上传清晰作答，剩下的交给错题家教。"
+        description="选好试卷，上传清晰作答，剩下的交给错题小方。"
         helpAnchor="grading"
         actions={<Link to={isStudent ? '/mistakes' : '/papers'} className="btn-outline px-4"><Icon name={isStudent ? 'bookmark' : 'book'} size={16} />{isStudent ? '复习错题' : '管理试卷'}</Link>}
       />

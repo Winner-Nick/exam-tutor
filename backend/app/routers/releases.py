@@ -131,7 +131,7 @@ def download_apk(tag: str, request: Request):
                     tmp.unlink(missing_ok=True)
                     raise HTTPException(502, "安装包拉取失败，请稍后再试") from None
 
-    filename = f"错题家教-{tag}.apk"
+    filename = f"错题小方-{tag}.apk"
     return FileResponse(
         cached,
         media_type="application/vnd.android.package-archive",
