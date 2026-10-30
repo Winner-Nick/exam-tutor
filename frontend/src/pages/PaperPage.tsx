@@ -12,6 +12,7 @@ import { PaperQuestionDialog } from '../components/PaperQuestionDialog'
 import { PaperViewer } from '../components/PaperViewer'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
+import { FileDropzone, SelectedFileList, UploadProgress } from '../components/UploadPanel'
 import { useUploadGuard } from '../hooks/useUploadGuard'
 import type { PaperFile, PaperQuestion } from '../types'
 import { compressPicked } from '../utils/compressImage'
@@ -36,11 +37,12 @@ function AddQuestionRow({ paperId }: { paperId: string }) {
   })
 
   return (
-    <form className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-3" onSubmit={(event) => { event.preventDefault(); if (number.trim() && type.length <= 30 && answer.length <= 500) add.mutate() }}>
-      <label><span className="sr-only">新题号</span><input value={number} onChange={(event) => setNumber(event.target.value)} placeholder="题号" maxLength={20} className="input w-24" /></label>
-      <label><span className="sr-only">新题题型</span><input value={type} onChange={(event) => setType(event.target.value)} placeholder="题型（选填）" maxLength={30} className="input w-32" /></label>
-      <label className="min-w-40 flex-1"><span className="sr-only">新题标准答案</span><input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="标准答案" maxLength={500} className="input" /></label>
-      <button type="submit" disabled={!number.trim() || type.length > 30 || answer.length > 500 || add.isPending} className="btn-outline px-3 text-sm"><Icon name="plus" size={14} />{add.isPending ? '添加中…' : '添加题目'}</button>
+    <form className="grid grid-cols-2 gap-2.5 border-t border-line bg-surface-2/30 p-4 sm:grid-cols-[7rem_9rem_minmax(0,1fr)_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); if (number.trim() && type.length <= 30 && answer.length <= 500) add.mutate() }}>
+      <p className="col-span-full mb-0.5 text-sm font-semibold">手动添加一道题</p>
+      <label><span className="mb-1 block text-xs font-medium text-ink2">题号</span><input aria-label="新题号" value={number} onChange={(event) => setNumber(event.target.value)} placeholder="如：13" maxLength={20} className="input" /></label>
+      <label><span className="mb-1 block text-xs font-medium text-ink2">题型（选填）</span><input aria-label="新题题型" value={type} onChange={(event) => setType(event.target.value)} placeholder="如：单选" maxLength={30} className="input" /></label>
+      <label className="col-span-full sm:col-span-1"><span className="mb-1 block text-xs font-medium text-ink2">标准答案</span><input aria-label="新题标准答案" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="输入标准答案" maxLength={500} className="input" /></label>
+      <button type="submit" disabled={!number.trim() || type.length > 30 || answer.length > 500 || add.isPending} className="btn-primary col-span-full w-full px-4 text-sm sm:col-span-1 sm:w-auto"><Icon name="plus" size={15} />{add.isPending ? '添加中…' : '添加题目'}</button>
     </form>
   )
 }
@@ -200,17 +202,18 @@ export function PaperPage() {
 
   return (
     <div className="space-y-5">
+      <Link to="/papers" className="btn-ghost -ml-2 px-2 text-xs"><Icon name="arrow-left" size={16} />返回试卷库</Link>
       <PageHeader
         title={paper.title || '试卷'}
         helpAnchor="papers"
-        description={<>{paper.page_count ? `${paper.page_count} 页 · ` : ''}{questions.length} 题{paper.subject ? ` · ${paper.subject}` : ''}{paper.grade ? ` · ${paper.grade}` : ''}{paper.submission_count > 0 && <> · <Link to={`/?paper=${paper.id}#recent-jobs`} className="text-primary-700 underline dark:text-primary-300">查看 {paper.submission_count} 次关联批改</Link></>}</>}
+        description={<>{paper.page_count ? `${paper.page_count} 页 · ` : ''}{questions.length} 题{paper.subject ? ` · ${paper.subject}` : ''}{paper.grade ? ` · ${paper.grade}` : ''}{paper.submission_count > 0 && <> · <Link to={`/?paper=${paper.id}#recent-jobs`} className="font-medium text-primary-700 underline underline-offset-4 dark:text-primary-300">查看 {paper.submission_count} 次关联批改</Link></>}</>}
         actions={
           <>
-            <button onClick={() => { setEditingTitle(paper.title || ''); setEditingSubject(paper.subject || ''); setEditingGrade(paper.grade || '') }} className="btn-outline px-3"><Icon name="settings" size={15} /> 试卷设置</button>
-            {!!paper.page_count && <button onClick={() => setShowPages(true)} className="btn-outline px-3"><Icon name="book-open" size={15} /> 查看原卷</button>}
-            {files.length > 0 && <button onClick={() => retry.mutate()} disabled={retry.isPending || busy} className="btn-outline px-3"><Icon name="refresh" size={15} />{retry.isPending ? '提交中…' : '重新识别'}</button>}
-            <button onClick={() => answersRef.current?.click()} disabled={busy || remaining === 0} className="btn-outline px-3"><Icon name="upload" size={15} /> 补传答案</button>
-            <button disabled={!canGrade} title={!canGrade ? '仅已确认完整且有题目的试卷可用于批改' : undefined} onClick={() => navigate(`/?paper=${paper.id}`)} className="btn-primary px-3"><Icon name="pen" size={15} /> 去批改</button>
+            <button onClick={() => { setEditingTitle(paper.title || ''); setEditingSubject(paper.subject || ''); setEditingGrade(paper.grade || '') }} className="btn-outline flex-1 px-3 sm:flex-none"><Icon name="settings" size={15} />试卷设置</button>
+            {!!paper.page_count && <button onClick={() => setShowPages(true)} className="btn-outline flex-1 px-3 sm:flex-none"><Icon name="book-open" size={15} />查看原卷</button>}
+            {files.length > 0 && <button onClick={() => retry.mutate()} disabled={retry.isPending || busy} className="btn-outline flex-1 px-3 sm:flex-none"><Icon name="refresh" size={15} />{retry.isPending ? '提交中…' : '重新识别'}</button>}
+            <button onClick={() => answersRef.current?.click()} disabled={busy || remaining === 0} className="btn-outline flex-1 px-3 sm:flex-none"><Icon name="upload" size={15} />补传答案</button>
+            <button disabled={!canGrade} title={!canGrade ? '仅已确认完整且有题目的试卷可用于批改' : undefined} onClick={() => navigate(`/?paper=${paper.id}`)} className="btn-primary order-first w-full px-4 sm:order-last sm:w-auto"><Icon name="pen" size={15} />去批改</button>
           </>
         }
       />
@@ -232,17 +235,31 @@ export function PaperPage() {
       {questions.length === 0 && paper.status !== 'error' && <EmptyState icon="file-text" title="这份试卷还没有题目" description="请重试识别、补传正确文件，或在下方手动添加题目；0 题试卷不能用于批改。" action={<button onClick={() => retry.mutate()} disabled={retry.isPending || files.length === 0} className="btn-outline px-4">使用原文件重试</button>} />}
       {missing > 0 && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-100">有 <b>{missing}</b> 题缺少标准答案。可补传答案文件或逐题编辑；缺答案的客观题会标为待确认。</div>}
 
-      <input ref={answersRef} type="file" multiple disabled={busy} accept=".pdf,application/pdf,image/*" className="hidden" onChange={(event) => { void selectFiles(event.target.files); event.target.value = '' }} />
-      <section className="card space-y-3 p-4" aria-labelledby="paper-files-title">
-        <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="paper-files-title" className="font-semibold">源文件</h2><span className="text-xs text-ink2">还可添加 {remaining} 个，整卷最多 30 个</span></div>
-        {files.length > 0 && <ul className="divide-y divide-line/60">{files.map((file) => <li key={file.id} className="flex min-h-11 flex-wrap items-center gap-2 py-2 text-sm"><Icon name="file-text" size={15} className="text-dim" /><span className="min-w-0 flex-1 truncate">{file.filename || '未命名文件'}</span><span className="text-xs text-dim">{file.page_count ? `${file.page_count} 页` : ''}{file.status === 'error' ? ` · ${file.error || '识别失败'}` : ''}</span><button onClick={() => setDeletingFile(file)} className="btn-ghost px-2 text-rose-700 dark:text-rose-300" aria-label={`删除文件 ${file.filename || file.id}`}><Icon name="trash" size={14} /> 删除</button></li>)}</ul>}
-        {pendingFiles.length > 0 && <><ul className="flex flex-wrap gap-2">{pendingFiles.map((file, index) => <li key={`${file.name}-${index}`} className="badge min-h-9 bg-surface-2 text-ink2"><span className="max-w-44 truncate">{file.name}</span><button disabled={busy} onClick={() => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} className="flex h-8 w-8 items-center justify-center" aria-label={`移除 ${file.name}`}><Icon name="x" size={12} /></button></li>)}</ul><div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => paperId && addAnswers.mutate({ files: pendingFiles, paperId, generation: compressionGeneration.current })} className="btn-primary px-4">{addAnswers.isPending ? uploadPct != null ? `上传中 ${uploadPct}%` : '等待服务器接收…' : picking ? '正在处理…' : `上传 ${pendingFiles.length} 个答案文件`}</button>{addAnswers.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消上传</button>}</div></>}
-        {files.length === 0 && pendingFiles.length === 0 && <p className="text-sm text-dim">手动建卷暂无源文件，可直接在下方逐题录入。</p>}
+      <section className="card overflow-hidden" aria-labelledby="paper-files-title">
+        <div className="flex items-center gap-3 border-b border-line/70 bg-surface-2/30 px-4 py-3"><Icon name="folder" size={18} className="text-dim" /><h2 id="paper-files-title" className="flex-1 text-sm font-semibold">源文件与答案</h2><span className="text-xs text-dim">还可添加 {remaining} / 30 个</span></div>
+        <div className="space-y-4 p-4">
+          {files.length > 0 && <ul className="divide-y divide-line/60">{files.map((file) => <li key={file.id} className="flex min-h-12 flex-wrap items-center gap-2 py-2 text-sm"><Icon name="file-text" size={16} className="text-dim" /><span className="min-w-0 flex-1 truncate">{file.filename || '未命名文件'}</span><span className="text-xs text-dim">{file.page_count ? `${file.page_count} 页` : ''}{file.status === 'error' ? ` · ${file.error || '识别失败'}` : ''}</span><button onClick={() => setDeletingFile(file)} className="btn-ghost px-2 text-rose-700 dark:text-rose-300" aria-label={`删除文件 ${file.filename || file.id}`}><Icon name="trash" size={14} /><span aria-hidden="true">删除</span></button></li>)}</ul>}
+          <FileDropzone inputRef={answersRef} onFiles={(list) => void selectFiles(list)} disabled={busy} picking={picking ? '正在处理照片…' : null} remaining={remaining} limit={30} title="补传答案或试卷文件" browseLabel="选择文件" />
+          {pendingFiles.length > 0 && <><SelectedFileList files={pendingFiles} onRemove={(index) => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} disabled={busy} label="待上传答案文件" /><button disabled={busy} onClick={() => paperId && addAnswers.mutate({ files: pendingFiles, paperId, generation: compressionGeneration.current })} className="btn-primary min-h-12 w-full px-4 sm:w-auto">{addAnswers.isPending ? '正在上传…' : `上传 ${pendingFiles.length} 个答案文件`}</button></>}
+          {addAnswers.isPending && <UploadProgress percent={uploadPct} onCancel={() => uploadController.current?.abort()} />}
+          {files.length === 0 && pendingFiles.length === 0 && <p className="text-xs leading-5 text-dim">手动建卷暂无源文件，可直接在下方逐题录入；有答案文件时可上传自动汇总。</p>}
+        </div>
       </section>
 
       <section className="card overflow-hidden" aria-labelledby="paper-questions-title">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3"><h2 id="paper-questions-title" className="font-semibold">题目与答案</h2><button onClick={() => knowledge.mutate()} disabled={knowledge.isPending || questions.length === 0} className="btn-outline px-3 text-sm"><Icon name="sparkles" size={14} />{knowledge.isPending ? '提交中…' : '批量补全知识点'}</button></div>
-        {questions.length > 0 && <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-sm"><thead><tr className="border-b border-line text-left text-xs text-ink2"><th className="px-3 py-2.5 font-medium">题号</th><th className="px-3 py-2.5 font-medium">题型 / 知识点</th><th className="px-3 py-2.5 font-medium">题干与选项</th><th className="px-3 py-2.5 font-medium">标准答案</th><th className="px-3 py-2.5 font-medium">操作</th></tr></thead><tbody className="divide-y divide-line/60">{questions.map((question) => <tr key={question.id}><td className="px-3 py-3 font-serif font-semibold">{question.number}</td><td className="max-w-36 px-3 py-3 text-xs text-ink2"><p>{question.type || question.section || '未分类'}</p>{question.knowledge_point && <p className="mt-1 text-dim">{question.knowledge_point}</p>}</td><td className="max-w-md px-3 py-3"><p className="line-clamp-2 whitespace-pre-wrap">{question.stem || '未填写题干'}</p>{question.options && <p className="mt-1 line-clamp-2 text-xs text-dim">{Object.entries(question.options).map(([key, value]) => `${key}.${value}`).join(' ')}</p>}</td><td className="max-w-48 px-3 py-3 whitespace-pre-wrap">{question.correct_answer || <span className="text-amber-700 dark:text-amber-300">未填写</span>}</td><td className="px-3 py-3"><div className="flex gap-1"><button onClick={() => setEditingQuestion(question)} className="btn-ghost px-2 text-primary-700 dark:text-primary-300"><Icon name="edit" size={14} /> 编辑</button><button onClick={() => setDeletingQuestion(question)} className="btn-ghost px-2 text-rose-700 dark:text-rose-300" aria-label={`删除第 ${question.number} 题`}><Icon name="trash" size={14} /></button></div></td></tr>)}</tbody></table></div>}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/70 px-4 py-3.5"><div className="flex items-center gap-2"><h2 id="paper-questions-title" className="font-serif text-lg font-bold">题目与答案</h2><span className="badge bg-surface-2 text-dim">{questions.length} 题</span></div><button onClick={() => knowledge.mutate()} disabled={knowledge.isPending || questions.length === 0} className="btn-outline w-full px-3 text-sm sm:w-auto"><Icon name="sparkles" size={14} />{knowledge.isPending ? '提交中…' : '批量补全知识点'}</button></div>
+        {questions.length > 0 && <>
+          <div className="hidden grid-cols-[4.5rem_7rem_minmax(0,1fr)_8rem_7.5rem] gap-3 border-b border-line/70 bg-surface-2/30 px-4 py-2.5 text-xs font-medium text-dim md:grid"><span>题号</span><span>题型 / 知识点</span><span>题干与选项</span><span>标准答案</span><span className="text-right">操作</span></div>
+          <ol className="divide-y divide-line/60">
+            {questions.map((question) => <li key={question.id} className="grid gap-3 p-4 md:grid-cols-[4.5rem_7rem_minmax(0,1fr)_8rem_7.5rem] md:items-center md:gap-3">
+              <div><span className="badge bg-primary-50 font-serif font-semibold text-primary-800 dark:bg-primary-950/35 dark:text-primary-200">第 {question.number} 题</span></div>
+              <div className="text-xs text-ink2"><p>{question.type || question.section || '未分类'}</p>{question.knowledge_point && <p className="mt-1 leading-5 text-dim">{question.knowledge_point}</p>}</div>
+              <div className="min-w-0"><p className="line-clamp-3 text-sm leading-6 whitespace-pre-wrap">{question.stem || '未填写题干'}</p>{question.options && <p className="mt-1 line-clamp-2 text-xs leading-5 text-dim">{Object.entries(question.options).map(([key, value]) => `${key}.${value}`).join(' ')}</p>}</div>
+              <div><p className="mb-1 text-xs font-medium text-dim md:hidden">标准答案</p><p className="text-sm whitespace-pre-wrap">{question.correct_answer || <span className="text-amber-700 dark:text-amber-300">未填写</span>}</p></div>
+              <div className="flex gap-2 md:justify-end"><button onClick={() => setEditingQuestion(question)} className="btn-outline flex-1 px-2 text-primary-700 dark:text-primary-300 md:flex-none"><Icon name="edit" size={14} />编辑</button><button onClick={() => setDeletingQuestion(question)} className="icon-btn border border-line text-rose-700 dark:text-rose-300" aria-label={`删除第 ${question.number} 题`}><Icon name="trash" size={15} /></button></div>
+            </li>)}
+          </ol>
+        </>}
         <AddQuestionRow paperId={paper.id} />
       </section>
       <p className="text-xs leading-relaxed text-ink2">修改答案或题目内容会按后端结果重判关联作答；请保存后再进入批改或生成新讲解。</p>

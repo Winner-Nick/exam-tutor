@@ -2,7 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { EmptyState } from '../components/EmptyState'
+import { ErrorState } from '../components/ErrorState'
 import { Icon } from '../components/Icon'
+import { PageHeader } from '../components/PageHeader'
 import { useToast } from '../components/Toast'
 import type { Student } from '../types'
 import { invalidateStudentLearningData } from '../utils/query'
@@ -138,83 +141,33 @@ function StudentRow({ student }: { student: Student }) {
 
   return (
     <div className="card p-4">
-      <div className="flex items-center gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-50 font-serif text-base font-bold text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
+      <div className="flex items-start gap-3">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-50 font-serif text-lg font-bold text-primary-700 dark:bg-primary-950/35 dark:text-primary-300">
           {student.name.slice(0, 1)}
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pt-0.5">
           {editing ? (
-            <form
-              className="flex items-center gap-2"
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (name.trim()) rename.mutate()
-              }}
-            >
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoFocus
-                maxLength={32}
-                className="input w-36 px-2 py-1"
-              />
-              <button type="submit" disabled={rename.isPending} className="text-sm text-primary-600 dark:text-primary-400">
-                保存
-              </button>
-              <button type="button" onClick={() => setEditing(false)} className="text-sm text-dim">
-                取消
-              </button>
+            <form className="flex flex-wrap items-center gap-1" onSubmit={(e) => { e.preventDefault(); if (name.trim()) rename.mutate() }}>
+              <input aria-label={`${student.name}的新姓名`} value={name} onChange={(e) => setName(e.target.value)} autoFocus maxLength={32} className="input min-w-0 flex-1 px-2.5" />
+              <button type="submit" disabled={rename.isPending || !name.trim()} className="btn-ghost px-2 text-primary-700 dark:text-primary-300">保存</button>
+              <button type="button" onClick={() => { setName(student.name); setEditing(false) }} className="btn-ghost px-2">取消</button>
             </form>
           ) : (
-            <p className="truncate font-semibold">
-              {student.name}
-              {student.account_username && (
-                <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 font-mono text-xs font-normal text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-                  @{student.account_username}
-                </span>
-              )}
-            </p>
+            <>
+              <p className="truncate text-base font-semibold">{student.name}</p>
+              {student.account_username && <span className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-mono text-xs text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300"><Icon name="check-circle" size={11} /><span className="truncate">@{student.account_username}</span></span>}
+              <p className="mt-1.5 text-xs text-dim">{student.submission_count} 次批改{(student.wrong_total ?? 0) > 0 && ` · 累计错题 ${student.wrong_total}`}</p>
+            </>
           )}
-          <p className="mt-0.5 text-xs text-dim">
-            {student.submission_count} 次批改
-            {(student.wrong_total ?? 0) > 0 && ` · 累计错题 ${student.wrong_total}`}
-          </p>
         </div>
-        <Link
-          to={`/?student=${student.id}`}
-          className="btn-ghost px-2.5 py-1.5 text-sm text-primary-600 dark:text-primary-400"
-        >
-          去批改
-        </Link>
-        {!student.is_self && (
-          <button
-            onClick={() => setShowAccount((v) => !v)}
-            title="登录账号管理"
-            className={`icon-btn p-1.5 ${showAccount ? 'text-primary-600 dark:text-primary-400' : ''}`}
-          >
-            <Icon name="settings" size={16} />
-          </button>
-        )}
-        {!editing && (
-          <button onClick={() => setEditing(true)} title="改名" className="icon-btn p-1.5">
-            <Icon name="edit" size={16} />
-          </button>
-        )}
-        {!student.is_self && (
-          <button
-            onClick={() => {
-              if (confirm(`确定删除学生「${student.name}」吗？其登录账号（如有）会一并注销。`)) del.mutate()
-            }}
-            title="删除"
-            className="icon-btn p-1.5 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-900/30"
-          >
-            <Icon name="trash" size={16} />
-          </button>
-        )}
+        {!editing && <div className="flex shrink-0 items-center gap-0.5">
+          {!student.is_self && <button onClick={() => setShowAccount((v) => !v)} title="登录账号管理" aria-label={`${student.name}：登录账号管理`} aria-expanded={showAccount} className={`icon-btn ${showAccount ? 'bg-primary-50 text-primary-700 dark:bg-primary-950/35 dark:text-primary-300' : ''}`}><Icon name="settings" size={17} /></button>}
+          <button onClick={() => { setName(student.name); setEditing(true) }} title="改名" aria-label={`${student.name}：改名`} className="icon-btn"><Icon name="edit" size={17} /></button>
+          {!student.is_self && <button disabled={del.isPending} onClick={() => { if (confirm(`确定删除学生「${student.name}」吗？其登录账号（如有）会一并注销。`)) del.mutate() }} title="删除" aria-label={`${student.name}：删除`} className="icon-btn hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950/35"><Icon name="trash" size={17} /></button>}
+        </div>}
       </div>
-      {showAccount && !student.is_self && (
-        <AccountPanel student={student} onClose={() => setShowAccount(false)} />
-      )}
+      {showAccount && !student.is_self && <AccountPanel student={student} onClose={() => setShowAccount(false)} />}
+      <Link to={`/?student=${student.id}`} className="btn-outline mt-4 w-full px-4 text-primary-700 dark:text-primary-300">去批改<Icon name="arrow-right" size={16} /></Link>
     </div>
   )
 }
@@ -235,50 +188,32 @@ export function StudentsPage() {
   })
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <p className="text-sm text-ink2">
-        管理你的学生。批改时选择对应学生，错题与统计将按学生分开记录；自己做题就选「我自己」。
-        点学生卡片上的 <Icon name="settings" size={13} className="inline" /> 可开通登录账号，学生即可自行拍照上传作答。
-      </p>
-      <form
-        className="flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (name.trim()) create.mutate(name.trim())
-        }}
-      >
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="学生姓名，如：小明"
-          maxLength={32}
-          className="input flex-1"
-        />
-        <button
-          type="submit"
-          disabled={!name.trim() || create.isPending}
-          className="btn-primary shrink-0 px-4 py-2"
-        >
-          <Icon name="plus" size={16} />
-          {create.isPending ? '添加中…' : '添加学生'}
-        </button>
-      </form>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <PageHeader title="学生管理" description="每位学生都有独立的批改、错题和统计。点卡片上的设置图标，可开通学生登录账号。" />
 
-      {students.isPending ? (
-        <div className="space-y-3">
-          {[0, 1].map((i) => (
-            <div key={i} className="skeleton h-[74px] rounded-2xl" />
-          ))}
-        </div>
-      ) : students.isError ? (
-        <p className="py-12 text-center text-dim">加载失败，请刷新重试</p>
-      ) : (
-        <div className="space-y-3">
-          {students.data.students.map((s) => (
-            <StudentRow key={s.id} student={s} />
-          ))}
-        </div>
-      )}
+      <section data-tour="student-create" className="card p-4 sm:p-5" aria-labelledby="add-student-title">
+        <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) create.mutate(name.trim()) }}>
+          <label htmlFor="add-student-name" id="add-student-title" className="text-sm font-semibold">添加一位学生</label>
+          <div className="mt-2.5 flex gap-2">
+            <input id="add-student-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="学生姓名，如：小明" maxLength={32} className="input min-w-0 flex-1" autoComplete="off" />
+            <button type="submit" disabled={!name.trim() || create.isPending} className="btn-primary shrink-0 px-4"><Icon name="plus" size={16} />{create.isPending ? '添加中…' : '添加学生'}</button>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-dim">之后选择对应学生上传作答即可；自己做题选择「我自己」。</p>
+        </form>
+      </section>
+
+      <section aria-labelledby="student-list-title">
+        <div className="mb-3 flex items-center justify-between"><h2 id="student-list-title" className="font-serif text-xl font-bold">学生列表</h2>{students.data && <span className="badge bg-surface-2 text-dim">{students.data.students.length} 人</span>}</div>
+        {students.isPending ? (
+          <div className="grid gap-3 md:grid-cols-2">{[0, 1].map((i) => <div key={i} className="skeleton h-44" />)}</div>
+        ) : students.isError ? (
+          <ErrorState error={students.error} onRetry={() => void students.refetch()} />
+        ) : students.data.students.length === 0 ? (
+          <EmptyState icon="users" title="还没有学生" description="先在上方添加一位学生，再开始拍照批改。" />
+        ) : (
+          <div className="grid items-start gap-3 md:grid-cols-2">{students.data.students.map((s) => <StudentRow key={s.id} student={s} />)}</div>
+        )}
+      </section>
     </div>
   )
 }

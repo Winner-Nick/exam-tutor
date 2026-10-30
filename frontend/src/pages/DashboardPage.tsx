@@ -12,6 +12,7 @@ import { Pagination } from '../components/Pagination'
 import { Spinner } from '../components/Spinner'
 import { StudentFilter } from '../components/StudentFilter'
 import { useToast } from '../components/Toast'
+import { FileDropzone, SelectedFileList, UploadProgress } from '../components/UploadPanel'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey'
 import { useUploadGuard } from '../hooks/useUploadGuard'
@@ -210,6 +211,10 @@ export function DashboardPage() {
   const remaining = Math.max(0, 12 - files.length)
   const canSubmit = !!selectedPaper && studentId != null && ((usePaperFiles && canReusePaperFiles) || files.length > 0) && !busy
 
+  useEffect(() => {
+    if (!canReusePaperFiles) setUsePaperFiles(false)
+  }, [canReusePaperFiles])
+
   async function addFiles(list: FileList | null) {
     if (busy || remaining === 0) return
     setPicking('正在处理…')
@@ -246,109 +251,113 @@ export function DashboardPage() {
   }, [page, total, jobs.data?.jobs.length, setParams])
 
   return (
-    <div className="space-y-6">
-      <PageHeader title={isStudent ? '我的批改' : '拍照批改'} description="上传清晰作答，先确认识别与判分，再结合讲解复习。" helpAnchor="grading" />
+    <div className="space-y-7">
+      <PageHeader
+        title={isStudent ? '我的批改' : '拍照批改'}
+        description="选好试卷，上传清晰作答，剩下的交给错题家教。"
+        helpAnchor="grading"
+        actions={<Link to={isStudent ? '/mistakes' : '/papers'} className="btn-outline px-4"><Icon name={isStudent ? 'bookmark' : 'book'} size={16} />{isStudent ? '复习错题' : '管理试卷'}</Link>}
+      />
 
-      <section className="card space-y-5 p-5 sm:p-6" aria-labelledby="new-submission-title">
-        <h2 id="new-submission-title" className="section-title flex items-center gap-2"><Icon name="pen" size={18} className="text-primary-600 dark:text-primary-400" />{isStudent ? '上传我的作答' : '批改新作业'}</h2>
-
-        {!isStudent && (
-          <div>
-            <p className="mb-2.5 flex items-center gap-2 text-sm font-medium"><span className={stepBadge}>1</span> 谁做的题？</p>
-            {students.isPending ? <div className="skeleton h-11 w-48" /> : students.isError ? (
-              <p className="text-sm text-rose-700 dark:text-rose-300" role="alert">学生列表加载失败 <button onClick={() => void students.refetch()} className="ml-2 underline">重试</button></p>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                {(students.data?.students ?? []).map((student) => (
-                  <button key={student.id} disabled={busy} onClick={() => setStudentId(student.id)} aria-pressed={studentId === student.id} className={`chip ${studentId === student.id ? 'chip-active' : ''}`}>
-                    <Icon name="user" size={14} />{student.is_self ? '我自己' : student.name}
-                  </button>
-                ))}
-                <Link to="/students" className="flex min-h-11 items-center gap-0.5 text-sm text-primary-700 hover:underline dark:text-primary-300"><Icon name="plus" size={14} /> 管理学生</Link>
-              </div>
-            )}
+      <section data-tour="submission-form" className="card overflow-hidden" aria-labelledby="new-submission-title" aria-busy={busy}>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/70 bg-gradient-to-r from-primary-50/80 to-surface px-5 py-5 sm:px-6 dark:from-primary-950/30">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary-600 text-white shadow-sm"><Icon name="pen" size={21} /></span>
+            <div><h2 id="new-submission-title" className="font-serif text-xl font-bold">{isStudent ? '上传我的作答' : '开始一次新批改'}</h2><p className="mt-0.5 text-xs text-dim">按步骤选择，提交前可随时修改</p></div>
           </div>
-        )}
+          <span className="badge bg-surface text-dim shadow-sm"><Icon name="check-circle" size={13} />三步完成</span>
+        </div>
 
-        <div>
-          <p className="mb-2.5 flex items-center gap-2 text-sm font-medium"><span className={stepBadge}>{isStudent ? 1 : 2}</span> 做的哪份题？</p>
-          <label className="mb-2 block max-w-md"><span className="sr-only">搜索可选试卷</span><input value={paperSearch} onChange={(event) => setPaperSearch(event.target.value)} className="input" placeholder="搜索可选试卷名称" /></label>
-          {papers.isPending && !selectedPaper ? <div className="skeleton h-11 max-w-md" /> : papers.isError && !selectedPaper ? (
-            <p className="text-sm text-rose-700 dark:text-rose-300" role="alert">试卷列表加载失败 <button onClick={() => void papers.refetch()} className="ml-2 underline">重试</button></p>
-          ) : selectablePapers.length === 0 && !paperId ? (
-            <p className="text-sm text-ink2">{paperSearch ? '没有匹配的可用试卷，请更换关键词。' : isStudent ? '还没有可用试卷，请告诉老师先录入并核对题目。' : <>还没有可用试卷，请先 <Link to="/papers" className="text-primary-700 underline dark:text-primary-300">录入试卷并补齐题目</Link>。部分识别试卷需先明确接受。</>}</p>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="min-w-0 max-w-full flex-1 sm:max-w-md">
-                <span className="sr-only">选择试卷</span>
-                <select value={paperId} disabled={busy} onChange={(event) => setPaperId(event.target.value)} className="input cursor-pointer">
-                  <option value="">— 选择试卷 —</option>
-                  {paperId && !selectedPaper && <option value={paperId}>正在核对所选试卷…</option>}
-                  {selectablePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title || '试卷'}（{paper.question_count} 题{paper.question_count - paper.answered_count > 0 ? `，${paper.question_count - paper.answered_count} 题缺答案` : ''}）</option>)}
-                </select>
-              </label>
-              {!isStudent && <Link to="/papers" className="flex min-h-11 items-center gap-0.5 text-sm text-primary-700 hover:underline dark:text-primary-300"><Icon name="plus" size={14} /> 新试卷</Link>}
+        <div className="grid xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+          <div className="space-y-7 p-5 sm:p-6">
+            {!isStudent && (
+              <section data-tour="students" aria-label="选择学生">
+                <div className="mb-3 flex items-center gap-2.5"><span className={stepBadge}>1</span><div><h3 className="text-sm font-semibold">这是谁的作业？</h3><p className="mt-0.5 text-xs text-dim">错题和统计会归入对应学生</p></div></div>
+                {students.isPending ? <div className="skeleton h-11 w-56" /> : students.isError ? (
+                  <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950/30 dark:text-rose-300" role="alert">学生列表加载失败 <button onClick={() => void students.refetch()} className="ml-2 min-h-9 font-semibold underline">重试</button></p>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(students.data?.students ?? []).map((student) => (
+                      <button key={student.id} disabled={busy} onClick={() => setStudentId(student.id)} aria-pressed={studentId === student.id} className={`chip ${studentId === student.id ? 'chip-active' : ''}`}>
+                        <Icon name="user" size={14} />{student.is_self ? '我自己' : student.name}{studentId === student.id && <Icon name="check" size={13} />}
+                      </button>
+                    ))}
+                    <Link to="/students" className="flex min-h-10 items-center gap-1 rounded-lg px-2 text-sm font-medium text-primary-700 hover:bg-primary-50 dark:text-primary-300 dark:hover:bg-primary-950/30"><Icon name="plus" size={14} />管理学生</Link>
+                  </div>
+                )}
+              </section>
+            )}
+
+            <section aria-label="选择试卷">
+              <div className="mb-3 flex items-center gap-2.5"><span className={stepBadge}>{isStudent ? 1 : 2}</span><div><h3 className="text-sm font-semibold">做的是哪份试卷？</h3><p className="mt-0.5 text-xs text-dim">仅显示已就绪、可用于批改的试卷</p></div></div>
+              <label className="relative mb-2.5 block"><span className="sr-only">搜索可选试卷</span><Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-dim" /><input value={paperSearch} onChange={(event) => setPaperSearch(event.target.value)} className="input pl-10" placeholder="搜索试卷名称" /></label>
+              {papers.isPending && !selectedPaper ? <div className="skeleton h-11 w-full" /> : papers.isError && !selectedPaper ? (
+                <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950/30 dark:text-rose-300" role="alert">试卷列表加载失败 <button onClick={() => void papers.refetch()} className="ml-2 min-h-9 font-semibold underline">重试</button></p>
+              ) : selectablePapers.length === 0 && !paperId ? (
+                <div className="subtle-panel p-3.5 text-sm leading-6 text-ink2">{paperSearch ? '没有匹配的可用试卷，请更换关键词。' : isStudent ? '还没有可用试卷，请告诉老师先录入并核对题目。' : <>还没有可用试卷，请先 <Link to="/papers" className="font-medium text-primary-700 underline underline-offset-4 dark:text-primary-300">录入试卷并补齐题目</Link>。</>}</div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="min-w-0 flex-1"><span className="sr-only">选择试卷</span><select data-tour="paper-select" value={paperId} disabled={busy} onChange={(event) => setPaperId(event.target.value)} className="input cursor-pointer">
+                      <option value="">请选择试卷</option>
+                      {paperId && !selectedPaper && <option value={paperId}>正在核对所选试卷…</option>}
+                      {selectablePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title || '试卷'}（{paper.question_count} 题{paper.question_count - paper.answered_count > 0 ? `，${paper.question_count - paper.answered_count} 题缺答案` : ''}）</option>)}
+                    </select></label>
+                    {!isStudent && <Link to="/papers" aria-label="新建试卷" className="icon-btn border border-line bg-surface"><Icon name="plus" size={17} /></Link>}
+                  </div>
+                  {selectedPaper && <div className="mt-3 flex items-center gap-3 rounded-xl border border-primary-100 bg-primary-50/60 p-3 dark:border-primary-900/50 dark:bg-primary-950/25"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface text-primary-600 dark:text-primary-300"><Icon name="book-open" size={18} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{selectedPaper.title || '试卷'}</p><p className="mt-0.5 text-xs text-dim">{selectedPaper.question_count} 道题{selectedPaper.question_count - selectedPaper.answered_count > 0 ? ` · ${selectedPaper.question_count - selectedPaper.answered_count} 题缺答案，需核对` : ' · 答案已配置'}</p></div><Icon name="check-circle" size={18} className="shrink-0 text-emerald-600" /></div>}
+                </>
+              )}
+            </section>
+          </div>
+
+          <section data-tour="submission-upload" className="border-t border-line/70 p-5 sm:p-6 xl:border-t-0 xl:border-l" aria-label="上传做题结果">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5"><span className={stepBadge}>{isStudent ? 2 : 3}</span><div><h3 className="text-sm font-semibold">上传做题结果</h3><p className="mt-0.5 text-xs text-dim">照片尽量平整、清晰、无阴影</p></div></div>
+              <button type="button" onClick={() => cameraRef.current?.click()} disabled={busy || usePaperFiles || remaining === 0} className="btn-outline shrink-0 px-3"><Icon name="camera" size={16} />拍照</button>
             </div>
-          )}
+            <fieldset disabled={busy} className="mt-4 min-w-0">
+              <FileDropzone inputRef={fileRef} onFiles={(list) => void addFiles(list)} disabled={usePaperFiles} picking={picking} remaining={remaining} limit={12} title="把作答照片放在这里" description={<>支持 JPG、PNG、WebP、HEIC 和 PDF</>} browseLabel="从相册或文件选择" />
+              {!isStudent && canReusePaperFiles && (
+                <label className="mt-3 flex min-h-12 cursor-pointer items-start gap-3 rounded-xl bg-surface-2/60 p-3 text-sm text-ink2">
+                  <input type="checkbox" checked={usePaperFiles} onChange={(event) => setUsePaperFiles(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-primary-600" />
+                  <span><span className="block font-medium text-ink">复用试卷扫描件作为作答</span><span className="mt-0.5 block text-xs text-dim">仅当源文件本身就是这份学生的作答时使用</span></span>
+                </label>
+              )}
+              {usePaperFiles ? <p className="mt-3 flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200"><Icon name="check-circle" size={17} />将使用试卷的 {selectedPaper?.page_count} 页扫描件进行批改</p> : <SelectedFileList files={files} onRemove={(index) => setFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} />}
+            </fieldset>
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => { void addFiles(event.target.files); event.target.value = '' }} />
+            {files.length > 0 && !usePaperFiles && <p className="mt-2 text-xs text-dim">已选择 {files.length} 个文件，提交后还可在结果页补拍。</p>}
+            {picking && <p className="sr-only" role="status">正在压缩文件，完成前不能提交。</p>}
+          </section>
         </div>
 
-        <fieldset disabled={busy} className="min-w-0">
-          <legend className="mb-2.5 flex flex-wrap items-center gap-2 text-sm font-medium"><span className={stepBadge}>{isStudent ? 2 : 3}</span> 上传做题结果</legend>
-          <p className="mb-2 text-xs text-ink2">本次还可选择 {remaining} 个文件，共最多 12 个；之后可在结果页补拍。</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => cameraRef.current?.click()} disabled={usePaperFiles || remaining === 0} className="btn-outline border-dashed px-4"><Icon name="camera" size={16} /> 拍照</button>
-            <button type="button" onClick={() => fileRef.current?.click()} disabled={usePaperFiles || remaining === 0} className="btn-outline border-dashed px-4">
-              {picking ? <><Spinner className="h-4 w-4" /> {picking}</> : <><Icon name="image" size={16} /> 相册 / 文件</>}
+        <div className="border-t border-line/70 bg-surface-2/30 p-4 sm:px-6">
+          <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
+            <p className="text-xs leading-5 text-dim" aria-live="polite">{!selectedPaper ? '选择试卷后即可继续' : studentId == null ? '请选择这份作业对应的学生' : !usePaperFiles && files.length === 0 ? '再添加至少一个作答文件，就可以开始批改' : `已选好「${selectedPaper.title || '试卷'}」，提交后将自动识别并判分。`}</p>
+            <button onClick={() => selectedPaper && studentId != null && submit.mutate({ paperId: selectedPaper.id, studentId, files, usePaperFiles, idempotencyKey })} disabled={!canSubmit} className="btn-primary min-h-12 shrink-0 px-7 text-base">
+              {submit.isPending ? <><Spinner className="h-4 w-4" />正在提交…</> : <>{isStudent ? '提交批改' : '开始批改'}<Icon name="arrow-right" size={17} /></>}
             </button>
-            {!isStudent && canReusePaperFiles && (
-              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-ink2">
-                <input type="checkbox" checked={usePaperFiles} onChange={(event) => setUsePaperFiles(event.target.checked)} className="h-5 w-5 accent-primary-600" />
-                复用试卷扫描件作为学生作答
-              </label>
-            )}
           </div>
-          {files.length > 0 && !usePaperFiles && (
-            <ul className="mt-2.5 flex flex-wrap gap-1.5" aria-label="已选文件">
-              {files.map((file, index) => (
-                <li key={`${file.name}-${index}`} className="badge min-h-9 bg-surface-2 text-ink2" title={file.name}>
-                  <Icon name="file-text" size={12} /><span className="max-w-36 truncate">{file.name}</span>
-                  <button type="button" onClick={() => setFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} className="flex h-8 w-8 items-center justify-center rounded-full hover:text-rose-600" aria-label={`移除 ${file.name}`}><Icon name="x" size={12} /></button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => { void addFiles(event.target.files); event.target.value = '' }} />
-          <input ref={fileRef} type="file" multiple accept=".pdf,application/pdf,image/*" className="hidden" onChange={(event) => { void addFiles(event.target.files); event.target.value = '' }} />
-        </fieldset>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => selectedPaper && studentId != null && submit.mutate({ paperId: selectedPaper.id, studentId, files, usePaperFiles, idempotencyKey })}
-            disabled={!canSubmit}
-            className="btn-primary min-w-40 px-8 text-base"
-          >
-            {submit.isPending ? uploadPct != null && uploadPct < 100 ? <><Icon name="upload" size={17} /> 上传中 {uploadPct}%</> : <><Spinner className="h-4 w-4 text-white" /> 等待服务器接收…</> : isStudent ? '提交批改' : '开始批改'}
-          </button>
-          {submit.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消上传</button>}
+          {submit.isPending && <div className="mt-3"><UploadProgress percent={uploadPct} onCancel={() => uploadController.current?.abort()} /></div>}
         </div>
-        {picking && <p className="text-sm text-ink2" role="status">正在压缩文件，完成前不能提交。</p>}
       </section>
 
-      <section id="recent-jobs" className="space-y-4" aria-labelledby="recent-jobs-title">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 id="recent-jobs-title" className="font-serif text-2xl font-bold text-ink">最近批改</h2>
-          <Link to="/guide#grading" className="text-sm text-primary-700 hover:underline dark:text-primary-300">查看批改帮助</Link>
+      <section id="recent-jobs" data-tour="recent-jobs" className="scroll-mt-24 space-y-4" aria-labelledby="recent-jobs-title">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div><div className="flex items-center gap-2.5"><h2 id="recent-jobs-title" className="font-serif text-2xl font-bold text-ink">最近批改</h2>{!jobs.isPending && <span className="badge bg-surface-2 text-dim">{total} 次</span>}</div><p className="mt-1 text-xs text-dim">点击记录可核对答案、查看讲解或继续答疑</p></div>
+          <Link to="/guide#grading" className="flex min-h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-primary-700 hover:bg-primary-50 dark:text-primary-300 dark:hover:bg-primary-950/30">查看批改帮助<Icon name="arrow-up-right" size={14} /></Link>
         </div>
-        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-          <label><span className="sr-only">搜索批改记录</span><input value={recordQuery} onChange={(event) => updateFilter('q', event.target.value, true)} className="input" placeholder="搜索试卷或记录" /></label>
+        <div className="subtle-panel grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <label className="relative block"><span className="sr-only">搜索批改记录</span><Icon name="search" size={15} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-dim" /><input value={recordQuery} onChange={(event) => updateFilter('q', event.target.value, true)} className="input pl-10" placeholder="搜索试卷或记录" /></label>
           <StudentFilter value={recordStudent} onChange={(value) => updateFilter('student', value ? String(value) : '')} />
-          <label><span className="sr-only">按试卷筛选</span><select value={recordPaper} onChange={(event) => updateFilter('paper', event.target.value)} className="input w-full sm:w-44">
+          <label><span className="sr-only">按试卷筛选</span><select value={recordPaper} onChange={(event) => updateFilter('paper', event.target.value)} className="input w-full lg:w-48">
             <option value="">全部试卷</option>
             {(papers.data?.papers ?? []).map((paper) => <option key={paper.id} value={paper.id}>{paper.title || '试卷'}</option>)}
           </select></label>
         </div>
         {jobs.isPending ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-28 rounded-2xl" />)}</div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-32" />)}</div>
         ) : jobs.isError ? (
           <ErrorState error={jobs.error} onRetry={() => void jobs.refetch()} />
         ) : jobs.data.jobs.length === 0 ? (

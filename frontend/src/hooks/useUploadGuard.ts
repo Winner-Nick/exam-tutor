@@ -9,8 +9,12 @@ export function useUploadGuard(active: boolean) {
   })
 
   useEffect(() => {
-    if (blocker.state !== 'blocked') return
+    if (!active && blocker.state === 'blocked') blocker.proceed()
+  }, [active, blocker])
+
+  useEffect(() => {
+    if (!active || blocker.state !== 'blocked') return
     if (window.confirm('上传尚未完成。离开会取消上传，确定离开吗？')) blocker.proceed()
     else blocker.reset()
-  }, [blocker])
+  }, [active, blocker])
 }

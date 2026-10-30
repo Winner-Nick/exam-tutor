@@ -311,20 +311,22 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
-      <PageHeader title="设置" description="管理账号、邀请、密码恢复与用户反馈。" helpAnchor="account" />
-      <Card title="账号" icon="user">
-        <div className="flex items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-sm text-ink2">{user.username}<span className="ml-2 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-dim">{user.role === 'admin' ? '管理员' : user.role === 'student' ? '学生' : '老师'}</span></p>
-          <button disabled={logout.isPending} onClick={() => logout.mutate()} className="btn-danger shrink-0 px-3 py-1.5 text-sm"><Icon name="logout" size={14} />{logout.isPending ? '正在退出…' : '退出登录'}</button>
+    <div data-tour="settings" className="mx-auto max-w-2xl space-y-5">
+      <PageHeader title="账号设置" description="管理当前账号、密码与家庭成员访问。" helpAnchor="account" />
+      <Card title="当前账号" icon="user">
+        <div className="flex items-center gap-3">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-50 font-serif text-lg font-bold text-primary-700 dark:bg-primary-950/35 dark:text-primary-300">{user.username.slice(0, 1).toUpperCase()}</span>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{user.username}</p><p className="mt-1 text-xs text-dim">{user.role === 'admin' ? '管理员账号' : user.role === 'student' ? '学生账号' : '老师账号'}</p></div>
+          <button disabled={logout.isPending} onClick={() => logout.mutate()} className="btn-danger shrink-0 px-3 text-sm"><Icon name="logout" size={15} />{logout.isPending ? '正在退出…' : '退出登录'}</button>
         </div>
       </Card>
-      <Card title="修改密码" icon="settings">
-        <form onSubmit={submitPw} className="space-y-3">
-          <input aria-label="原密码" className="input" type="password" placeholder="原密码" required maxLength={128} value={oldPw} onChange={(event) => setOldPw(event.target.value)} autoComplete="current-password" />
-          <input aria-label="新密码" className="input" type="password" placeholder="新密码（至少 8 位）" required minLength={8} maxLength={128} value={newPw} onChange={(event) => setNewPw(event.target.value)} autoComplete="new-password" />
-          <input aria-label="再次输入新密码" className="input" type="password" placeholder="再次输入新密码" required minLength={8} maxLength={128} value={confirmPw} onChange={(event) => setConfirmPw(event.target.value)} autoComplete="new-password" />
-          <button disabled={!oldPw || !newPw || !confirmPw || changePw.isPending} className="btn-primary px-4 py-2 text-sm">{changePw.isPending ? '正在保存…' : '保存新密码'}</button>
+      <Card title="修改密码" icon="lock">
+        <form onSubmit={submitPw} className="space-y-4">
+          <label className="block text-sm font-medium text-ink2">原密码<input aria-label="原密码" className="input mt-1.5" type="password" placeholder="输入当前使用的密码" required maxLength={128} value={oldPw} onChange={(event) => setOldPw(event.target.value)} autoComplete="current-password" /></label>
+          <label className="block text-sm font-medium text-ink2">新密码<input aria-label="新密码" className="input mt-1.5" type="password" placeholder="至少 8 位，可使用中文" required minLength={8} maxLength={128} value={newPw} onChange={(event) => setNewPw(event.target.value)} autoComplete="new-password" /></label>
+          <label className="block text-sm font-medium text-ink2">确认新密码<input aria-label="再次输入新密码" className="input mt-1.5" type="password" placeholder="再次输入新密码" required minLength={8} maxLength={128} value={confirmPw} onChange={(event) => setConfirmPw(event.target.value)} autoComplete="new-password" /></label>
+          <p className="text-xs leading-5 text-dim">保存后，其他设备会退出登录，本设备保持登录。</p>
+          <button disabled={!oldPw || !newPw || !confirmPw || changePw.isPending} className="btn-primary min-h-12 w-full px-4 text-sm sm:w-auto">{changePw.isPending ? '正在保存…' : '保存新密码'}</button>
         </form>
       </Card>
       {user.role === 'admin' && <AdminUserManager />}

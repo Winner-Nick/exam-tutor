@@ -20,6 +20,7 @@ export const useUi = create<UiState>((set) => ({
       const theme: Theme = s.theme === 'dark' ? 'light' : 'dark'
       localStorage.setItem('et-theme', theme)
       document.documentElement.classList.toggle('dark', theme === 'dark')
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#151915' : '#f6f6f1')
       return { theme }
     }),
 }))

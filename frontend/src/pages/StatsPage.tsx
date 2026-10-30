@@ -78,6 +78,8 @@ export function StatsPage() {
   const knowledgePoints = data.knowledge_points ?? []
   const summary = data.summary
   const noObjectiveJobs = summary.no_objective_jobs ?? 0
+  const objectiveTotal = summary.correct + summary.wrong
+  const objectivePercent = objectiveTotal > 0 ? Math.round((summary.correct / objectiveTotal) * 100) : null
   const personalMode = studentId != null || user.role === 'student'
   const points = data.trend
   const coverage = data.knowledge_coverage
@@ -92,17 +94,23 @@ export function StatsPage() {
     <div className="space-y-5">
       <PageHeader
         title="学习统计"
-        description="正确率只统计可客观判分的题目；待确认与主观题单独呈现。"
+        description="看见进步，也看见下一步需要关注的地方。"
         helpAnchor="stats"
-        actions={<><StudentFilter value={studentId} onChange={changeStudent} /><label><span className="sr-only">统计时间范围</span><select value={days} onChange={(event) => changeDays(Number(event.target.value))} className="input w-auto"><option value={7}>近 7 天</option><option value={30}>近 30 天</option><option value={90}>近 90 天</option><option value={365}>近一年</option></select></label></>}
+        actions={<><StudentFilter value={studentId} onChange={changeStudent} /><label className="w-full sm:w-auto"><span className="sr-only">统计时间范围</span><select value={days} onChange={(event) => changeDays(Number(event.target.value))} className="input w-full sm:w-auto"><option value={7}>近 7 天</option><option value={30}>近 30 天</option><option value={90}>近 90 天</option><option value={365}>近一年</option></select></label></>}
       />
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="统计摘要">
-        {[{ label: '完成批改', value: summary.total_jobs }, { label: '待确认题', value: summary.unknown }, { label: '主观题', value: summary.subjective }, { label: '无客观题记录', value: noObjectiveJobs }].map((item) => <div key={item.label} className="card p-4"><p className="font-serif text-2xl font-bold">{item.value}</p><p className="mt-1 text-xs text-ink2">{item.label}</p></div>)}
+      <section data-tour="stats-overview" className="card overflow-hidden" aria-label="统计摘要">
+        <div className="flex items-center gap-4 bg-gradient-to-r from-primary-50/85 to-surface p-5 dark:from-primary-950/30">
+          <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-surface text-primary-700 shadow-sm dark:text-primary-300"><Icon name="trending-up" size={26} /></span>
+          <div className="min-w-0 flex-1"><p className="text-xs font-medium text-dim">近 {days} 天客观题正确率</p><p className="mt-1 font-serif text-3xl font-bold">{objectivePercent == null ? '—' : `${objectivePercent}%`}</p><p className="mt-1 text-xs text-dim">{objectiveTotal > 0 ? `答对 ${summary.correct} 题 · 答错 ${summary.wrong} 题` : '当前范围暂无客观题判分数据'}</p></div>
+        </div>
+        <div className="grid grid-cols-2 gap-px border-t border-line/70 bg-line/60 sm:grid-cols-4">
+          {[{ label: '完成批改', value: summary.total_jobs }, { label: '待确认题', value: summary.unknown }, { label: '主观题', value: summary.subjective }, { label: '无客观题记录', value: noObjectiveJobs }].map((item) => <div key={item.label} className="bg-surface p-4"><p className="font-serif text-2xl font-bold">{item.value}</p><p className="mt-1 text-xs text-ink2">{item.label}</p></div>)}
+        </div>
       </section>
 
       <section className="card p-5">
-        <h2 className="section-title mb-1 flex items-center gap-2"><Icon name="chart" size={17} className="text-primary-600 dark:text-primary-400" />{personalMode ? '个人客观题正确率趋势' : '班级客观题正确率趋势（按日汇总）'}</h2>
+        <h2 className="section-title mb-1 flex items-center gap-2"><Icon name="chart" size={17} className="text-primary-600 dark:text-primary-400" /><span>{personalMode ? '个人客观题正确率趋势' : '班级客观题正确率趋势'}<span className="hidden sm:inline">{personalMode ? '' : '（按日汇总）'}</span></span></h2>
         <p className="mb-3 text-xs text-ink2">{personalMode ? '仅连接同一学生、且有客观题的记录。' : '同一天按全班答对数与答错数汇总，不把不同学生依次连成个人折线。'}最多显示 30 个点。</p>
         {points.length === 0 ? <EmptyState icon="chart" title="当前范围未产生客观题正确率" description="只有主观题、全待确认或尚无完成记录时，不显示全对或 0% 趋势。" /> : <TrendChart points={points} label={personalMode ? '个人客观题正确率趋势' : '班级按日客观题正确率趋势'} />}
       </section>

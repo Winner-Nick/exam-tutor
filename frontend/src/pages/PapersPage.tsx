@@ -11,6 +11,7 @@ import { PageHeader } from '../components/PageHeader'
 import { Pagination } from '../components/Pagination'
 import { Spinner } from '../components/Spinner'
 import { useToast } from '../components/Toast'
+import { FileDropzone, SelectedFileList, UploadProgress } from '../components/UploadPanel'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey'
 import { useUploadGuard } from '../hooks/useUploadGuard'
@@ -149,42 +150,31 @@ export function PapersPage() {
     <div className="space-y-6">
       <PageHeader title="试卷库" description="录入题目与答案，确认识别完整后再用于批改。" helpAnchor="papers" />
 
-      <section className="card p-5 sm:p-6" aria-labelledby="create-paper-title">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id="create-paper-title" className="section-title flex items-center gap-2"><Icon name="book" size={18} className="text-primary-600 dark:text-primary-400" /> 录入新试卷</h2>
-          <button onClick={() => setManualOpen(true)} disabled={busy} className="btn-ghost px-3 text-sm text-primary-700 dark:text-primary-300"><Icon name="edit" size={14} /> 手动建卷</button>
+      <section data-tour="paper-upload" className="card overflow-hidden" aria-labelledby="create-paper-title" aria-busy={busy}>
+        <div className="flex items-center justify-between gap-3 border-b border-line/70 bg-surface-2/35 px-5 py-4 sm:px-6">
+          <div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-primary-700 dark:bg-primary-950/35 dark:text-primary-300"><Icon name="book" size={20} /></span><div><h2 id="create-paper-title" className="font-serif text-lg font-bold">录入新试卷</h2><p className="mt-0.5 text-xs text-dim">题目与答案只需录入一次</p></div></div>
+          <button onClick={() => setManualOpen(true)} disabled={busy} className="btn-ghost shrink-0 px-2.5 text-sm text-primary-700 dark:text-primary-300"><Icon name="edit" size={15} />手动建卷</button>
         </div>
-        <p className="mt-1.5 text-sm leading-relaxed text-ink2">上传 PDF 或照片，含答案、不含答案或只有答案页都可以。每份试卷最多 30 个文件，本次还可选 {remaining} 个。</p>
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-          <button onClick={() => inputRef.current?.click()} disabled={busy || remaining === 0} className="btn-outline shrink-0 border-dashed px-4">
-            {picking ? <><Spinner className="h-4 w-4" /> {picking}</> : <><Icon name="upload" size={16} /> 选择文件{pendingFiles.length > 0 && `（${pendingFiles.length}）`}</>}
+        <div className="p-5 sm:p-6">
+          <p className="mb-4 text-sm leading-6 text-ink2">上传 PDF 或照片，含答案、不含答案或只有答案页都可以。</p>
+          <FileDropzone inputRef={inputRef} onFiles={(list) => void addFiles(list)} disabled={busy} picking={picking} remaining={remaining} limit={30} title="上传整份试卷" browseLabel="选择试卷文件" />
+          {pendingFiles.length > 0 && <div className="mt-4"><SelectedFileList files={pendingFiles} onRemove={(index) => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} disabled={busy} label="待上传文件" /></div>}
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-medium text-ink2 sm:col-span-2">试卷名称<input aria-label="试卷名称" value={title} disabled={busy} onChange={(event) => setTitle(event.target.value)} placeholder="留空则自动识别（选填）" maxLength={80} className="input mt-1.5" /></label>
+            <label className="text-xs font-medium text-ink2">学科（选填）<input value={subject} disabled={busy} onChange={(event) => setSubject(event.target.value)} placeholder="如：英语、数学、物理" maxLength={30} className="input mt-1.5" /></label>
+            <label className="text-xs font-medium text-ink2">适用年级（选填）<input value={grade} disabled={busy} onChange={(event) => setGrade(event.target.value)} placeholder="如：初三、五年级" maxLength={30} className="input mt-1.5" /></label>
+          </div>
+          <button onClick={() => create.mutate({ files: pendingFiles, title: title.trim() || null, idempotencyKey })} disabled={pendingFiles.length === 0 || busy} className="btn-primary mt-5 min-h-12 w-full px-5 text-base">
+            {create.isPending ? <><Spinner className="h-4 w-4" />正在提交…</> : <>开始识别<Icon name="arrow-right" size={17} /></>}
           </button>
-          <label className="min-w-0 flex-1"><span className="sr-only">试卷名称</span><input value={title} disabled={busy} onChange={(event) => setTitle(event.target.value)} placeholder="试卷名称（可留空自动识别）" maxLength={80} className="input" /></label>
-          <button onClick={() => create.mutate({ files: pendingFiles, title: title.trim() || null, idempotencyKey })} disabled={pendingFiles.length === 0 || busy} className="btn-primary shrink-0 px-5">
-            {create.isPending ? uploadPct != null && uploadPct < 100 ? `上传中 ${uploadPct}%` : '等待服务器接收…' : '开始识别'}
-          </button>
-          {create.isPending && <button onClick={() => uploadController.current?.abort()} className="btn-danger px-4">取消</button>}
+          {create.isPending && <div className="mt-3"><UploadProgress percent={uploadPct} onCancel={() => uploadController.current?.abort()} /></div>}
+          {picking && <p className="sr-only" role="status">正在压缩文件，完成前不能开始识别。</p>}
         </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-medium text-ink2">学科（选填）<input value={subject} disabled={busy} onChange={(event) => setSubject(event.target.value)} placeholder="如：英语、数学、物理" maxLength={30} className="input mt-1" /></label>
-          <label className="text-xs font-medium text-ink2">适用年级（选填）<input value={grade} disabled={busy} onChange={(event) => setGrade(event.target.value)} placeholder="如：初三、五年级" maxLength={30} className="input mt-1" /></label>
-        </div>
-        {pendingFiles.length > 0 && (
-          <ul className="mt-2.5 flex flex-wrap gap-1.5" aria-label="待上传文件">
-            {pendingFiles.map((file, index) => (
-              <li key={`${file.name}-${index}`} className="badge min-h-9 bg-surface-2 text-ink2" title={file.name}>
-                <Icon name="file-text" size={12} /><span className="max-w-36 truncate">{file.name}</span>
-                <button disabled={busy} onClick={() => setPendingFiles((old) => old.filter((_, itemIndex) => itemIndex !== index))} className="flex h-8 w-8 items-center justify-center rounded-full hover:text-rose-600" aria-label={`移除 ${file.name}`}><Icon name="x" size={12} /></button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <input ref={inputRef} type="file" multiple disabled={busy} accept=".pdf,application/pdf,image/*" className="hidden" onChange={(event) => { void addFiles(event.target.files); event.target.value = '' }} />
-        {picking && <p className="mt-2 text-sm text-ink2" role="status">正在压缩文件，完成前不能开始识别。</p>}
       </section>
 
-      <section className="space-y-4" aria-label="已有试卷">
-        <label className="block max-w-md"><span className="sr-only">搜索试卷</span><input value={query} onChange={(event) => { const { value } = event.target; setParams((old) => { const next = new URLSearchParams(old); if (value) next.set('q', value); else next.delete('q'); next.delete('page'); return next }, { replace: true }) }} className="input" placeholder="搜索试卷名称" /></label>
+      <section className="space-y-4" aria-labelledby="paper-library-title">
+        <div className="flex items-end justify-between gap-3"><div><h2 id="paper-library-title" className="font-serif text-2xl font-bold">我的试卷</h2><p className="mt-1 text-xs text-dim">核对题目与答案后，即可用于多次批改</p></div>{papers.data && <span className="badge bg-surface-2 text-dim">{total} 份</span>}</div>
+        <label className="relative block"><span className="sr-only">搜索试卷</span><Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-dim" /><input value={query} onChange={(event) => { const { value } = event.target; setParams((old) => { const next = new URLSearchParams(old); if (value) next.set('q', value); else next.delete('q'); next.delete('page'); return next }, { replace: true }) }} className="input pl-10" placeholder="搜索试卷名称" /></label>
         {papers.isPending ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="skeleton h-28 rounded-2xl" />)}</div>
         ) : papers.isError ? (

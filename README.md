@@ -100,7 +100,8 @@ your.domain {
 
 1. 在仓库 **Settings → Secrets and variables → Actions → Variables** 添加 `APP_SERVER_URL`(如 `https://your.domain`);
 2. 手动触发 **Actions → Android APK → Run workflow**(或推送 frontend 改动自动触发);
-3. 构建完成后在 run 页面 **Artifacts** 下载 APK 直接安装。
+3. 构建完成后在 run 页面 **Artifacts** 下载 APK 直接安装；推送 `v*` 标签时会同时发布到 download 页使用的 GitHub Releases，标签版本须与 `frontend/package.json` 一致。
+4. 安卓 App 启动、回到前台及每 6 小时自动检查正式 Release；发现外壳新版本时提示用户下载，网页内容仍随服务器自动更新。
 
 不想折腾 APK 的话,手机浏览器打开网站「添加到主屏幕」即是 PWA 全屏应用。
 

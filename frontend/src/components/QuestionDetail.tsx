@@ -105,14 +105,14 @@ export function QuestionDetail({
 
       {question.stem ? <p className="leading-relaxed whitespace-pre-wrap">{question.stem}</p> : <p className="text-sm text-dim">未识别到题干，可在试卷库中补全。</p>}
 
-      <dl className="grid gap-2 rounded-xl border border-line bg-surface-2/60 p-3 text-sm sm:grid-cols-2">
-        <div>
-          <dt className="text-xs text-dim">学生答案</dt>
-          <dd className="mt-1 whitespace-pre-wrap text-ink">{question.student_answer?.trim() || '未作答 / 未识别'}</dd>
+      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+        <div className={`rounded-2xl border p-3.5 ${question.status === 'wrong' ? 'border-rose-200 bg-rose-50/65 dark:border-rose-900/50 dark:bg-rose-950/25' : 'border-line bg-surface-2/55'}`}>
+          <dt className="flex items-center gap-1.5 text-xs font-medium text-dim"><Icon name="user" size={13} />学生答案</dt>
+          <dd className="mt-2 text-[15px] leading-6 whitespace-pre-wrap text-ink">{question.student_answer?.trim() || '未作答 / 未识别'}</dd>
         </div>
-        <div>
-          <dt className="text-xs text-dim">标准答案</dt>
-          <dd className="mt-1 whitespace-pre-wrap text-ink">{question.correct_answer?.trim() || '未提供，需人工确认'}</dd>
+        <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/60 p-3.5 dark:border-emerald-900/50 dark:bg-emerald-950/20">
+          <dt className="flex items-center gap-1.5 text-xs font-medium text-emerald-800 dark:text-emerald-200"><Icon name="check-circle" size={13} />标准答案</dt>
+          <dd className="mt-2 text-[15px] leading-6 whitespace-pre-wrap text-emerald-950 dark:text-emerald-50">{question.correct_answer?.trim() || '未提供，需人工确认'}</dd>
         </div>
       </dl>
 

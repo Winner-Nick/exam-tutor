@@ -45,12 +45,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             role={t.kind === 'error' ? 'alert' : 'status'}
-            className={`pop-in flex max-w-lg items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white shadow-lg ${
-              t.kind === 'error' ? 'bg-rose-700' : 'bg-stone-800 dark:bg-stone-600'
+            className={`pop-in flex max-w-full items-center gap-3 rounded-2xl border bg-surface px-4 py-3 text-sm font-medium text-ink shadow-xl sm:max-w-lg ${
+              t.kind === 'error' ? 'border-rose-200 dark:border-rose-800' : 'border-line'
             }`}
           >
-            <Icon name={t.kind === 'error' ? 'alert' : 'check'} size={15} />
-            {t.text}
+            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${t.kind === 'error' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'}`}>
+              <Icon name={t.kind === 'error' ? 'alert' : 'check'} size={15} />
+            </span>
+            <span className="min-w-0 leading-5">{t.text}</span>
           </div>
         ))}
       </div>

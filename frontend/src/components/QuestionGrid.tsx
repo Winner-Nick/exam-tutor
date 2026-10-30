@@ -52,23 +52,22 @@ export function QuestionGrid({
   )
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="按判分状态筛选">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold">题目导航</p><span className="text-xs text-dim">{visible.length} 道题</span></div>
+      <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1 xl:flex-wrap xl:overflow-visible" role="group" aria-label="按判分状态筛选">
         {FILTERS.map((f) => (
           <button
             key={f.key}
             onClick={() => onFilterChange(f.key)}
             aria-pressed={filter === f.key}
-            className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
-              filter === f.key ? 'chip chip-active' : 'chip'
-            }`}
+            className={`shrink-0 text-xs ${filter === f.key ? 'chip chip-active' : 'chip'}`}
           >
             {f.label} {counts[f.key]}
           </button>
         ))}
       </div>
 
-      <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8 lg:grid-cols-5 xl:grid-cols-6">
+      <div className="grid grid-cols-5 gap-2 sm:grid-cols-8 xl:grid-cols-5">
         {visible.map((q) => (
           <button
             key={q.id}
@@ -76,18 +75,18 @@ export function QuestionGrid({
             title={`第 ${q.number} 题，${STATUS_LABEL[q.status]}`}
             aria-label={`第 ${q.number} 题，${STATUS_LABEL[q.status]}${q.status !== 'correct' && q.explanation ? '，已有讲解' : ''}`}
             aria-pressed={selectedQid === q.id}
-            className={`relative flex h-9 items-center justify-center rounded-lg font-serif text-xs font-semibold transition-all ${DOT_CLS[q.status]} ${
-              selectedQid === q.id ? 'ring-2 ring-primary-500 ring-offset-1 ring-offset-surface' : ''
+            className={`relative flex h-11 items-center justify-center rounded-xl font-serif text-sm font-semibold transition-all ${DOT_CLS[q.status]} ${
+              selectedQid === q.id ? 'ring-2 ring-primary-500 ring-offset-2 ring-offset-surface' : ''
             }`}
           >
             {q.number}
             {q.status !== 'correct' && q.explanation && (
-              <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-primary-500" />
+              <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full border border-surface bg-primary-500" />
             )}
           </button>
         ))}
         {visible.length === 0 && (
-          <p className="col-span-full py-6 text-center text-xs text-dim">该分类下没有题目</p>
+          <p className="col-span-full py-8 text-center text-xs text-dim">该分类下没有题目</p>
         )}
       </div>
     </div>

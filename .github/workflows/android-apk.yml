@@ -54,7 +54,12 @@ jobs:
             echo "::error::请在仓库 Settings -> Actions Variables 配置 APP_SERVER_URL"
             exit 1
           fi
-          npm i --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npm i --no-save @capacitor/cli@6 @capacitor/android@6
+          VERSION_NAME=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VERSION_NAME" ]]; then
+            echo "::error::标签版本 ${GITHUB_REF_NAME} 必须与 frontend/package.json 的 $VERSION_NAME 一致"
+            exit 1
+          fi
           cat > capacitor.config.json <<EOF
           {
             "appId": "work.examtutor.app",
@@ -64,6 +69,8 @@ jobs:
           }
           EOF
           npx cap add android
+          sed -i 's/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName "1.0.0"/versionName "'"$VERSION_NAME"'"/' \
+            android/app/build.gradle
           # 拍照上传需要相机权限
           sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.CAMERA" />#' \
             android/app/src/main/AndroidManifest.xml

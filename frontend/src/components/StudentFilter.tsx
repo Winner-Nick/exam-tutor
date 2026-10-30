@@ -17,7 +17,7 @@ export function StudentFilter({
       aria-label="按学生筛选"
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
-      className="input w-auto cursor-pointer px-3 py-1.5"
+      className="input w-full cursor-pointer sm:w-auto sm:min-w-36"
     >
       <option value="">全部学生</option>
       {list.map((s) => (

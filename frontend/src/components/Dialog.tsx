@@ -75,20 +75,20 @@ export function Dialog({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onMouseDown={backdropClick}>
+    <div className="dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[3px] sm:p-6" onMouseDown={backdropClick}>
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`pop-in card max-h-[90dvh] w-full overflow-y-auto p-5 shadow-2xl outline-none ${className}`}
+        className={`dialog-panel pop-in card thin-scroll max-h-[90dvh] w-full overflow-y-auto p-6 shadow-2xl outline-none ${className}`}
       >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <h2 id={titleId} className="font-serif text-lg font-bold text-ink">{title}</h2>
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <h2 id={titleId} className="font-serif text-xl font-bold text-ink">{title}</h2>
           {!hideClose && (
             <button onClick={onClose} disabled={preventClose} className="icon-btn -mt-2 -mr-2" aria-label="关闭对话框">
-              <Icon name="x" size={18} />
+              <Icon name="x" size={19} />
             </button>
           )}
         </div>

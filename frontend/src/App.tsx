@@ -3,7 +3,9 @@ import { lazy, Suspense, useEffect } from 'react'
 import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError, UNAUTHORIZED_EVENT } from './api'
 import { AppShell } from './components/AppShell'
+import { AppUpdatePrompt } from './components/AppUpdatePrompt'
 import { ErrorState } from './components/ErrorState'
+import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 import { Spinner } from './components/Spinner'
 import { ToastProvider } from './components/Toast'
 import { DashboardPage } from './pages/DashboardPage'
@@ -87,6 +89,7 @@ function TeacherOnly() {
 const router = createBrowserRouter([
   {
     element: <SessionEvents />,
+    errorElement: <RouteErrorBoundary />,
     children: [
       { path: '/login', element: <LoginPage /> },
       { path: '/download', element: <Suspense fallback={<div className="flex justify-center py-20" role="status"><Spinner className="h-8 w-8" /></div>}><DownloadPage /></Suspense> },
@@ -119,6 +122,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <RouterProvider router={router} />
+        <AppUpdatePrompt />
       </ToastProvider>
     </QueryClientProvider>
   )

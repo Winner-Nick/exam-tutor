@@ -109,7 +109,7 @@ export function DownloadPage() {
                 自动更新
               </p>
               <p className="mt-1 text-xs leading-relaxed text-dim">
-                App 内容随网页自动更新，无需重装；仅图标等外壳变化时才需下载新版
+                App 会自动检查新版本；网页内容无需重装，外壳升级时会提示下载新版
               </p>
             </div>
           </div>
